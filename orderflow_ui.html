@@ -680,14 +680,16 @@ function buildRow(r,rank){
   const up=r.direction==='up';
   const action=up?'<span class="action act-buy">BUY CALL</span>':'<span class="action act-sell">BUY PUT</span>';
   const scoreCls=up?'sg':'sr';
-  const alignTag=r.aligned>=3?'<span class="align-tag">ALL 3 ALIGNED</span>':r.aligned===2?'<span style="font-size:9px;font-weight:800;padding:3px 9px;border-radius:20px;background:var(--bg3);color:var(--text2)">2/3 aligned</span>':'';
+  const alignTag=r.aligned>=4?'<span class="align-tag">ALL 4 ALIGNED</span>':r.aligned===3?'<span style="font-size:9px;font-weight:800;padding:3px 9px;border-radius:20px;background:var(--bg3);color:var(--text2)">3/4 aligned</span>':'';
   const reasons=(r.reasons||[]).join(' · ')||'building';
   // breakdown of where the score came from
-  const bd=`<div class="detail"><div class="detail-hd">Last 3-min window — price leads, book &amp; OI confirm</div>
+  const fs=r.fut_score||0;
+  const bd=`<div class="detail"><div class="detail-hd">Last 3-min window — price leads, book, OI &amp; futures confirm</div>
     <div class="factor"><span class="factor-n">Price move</span><span class="factor-pts ${r.price_score>0?'fp-up':r.price_score<0?'fp-dn':'fp-0'}">${r.price_score>0?'+':''}${r.price_score}%</span><span class="factor-note">moved in 3min — ${r.price_score>0.05?'up (this is the gate)':r.price_score<-0.05?'down (this is the gate)':'flat → no points'}</span></div>
     <div class="factor"><span class="factor-n">Order book</span><span class="factor-pts ${r.book_score>0?'fp-up':r.book_score<0?'fp-dn':'fp-0'}">${r.book_score>0?'+':''}${r.book_score}</span><span class="factor-note">bid/ask bias — ${r.book_score>0.2?'buyers heavier':r.book_score<-0.2?'sellers heavier':'balanced'}</span></div>
     <div class="factor"><span class="factor-n">OI build</span><span class="factor-pts ${r.oi_score>0?'fp-up':r.oi_score<0?'fp-dn':'fp-0'}">${r.oi_score>0?'+':''}${r.oi_score}</span><span class="factor-note">option positioning — ${r.oi_score>0.2?'bullish':r.oi_score<-0.2?'bearish':'neutral'}</span></div>
-    <div class="detail-foot"><b>${r.aligned}/3 forces aligned ${up?'UP':'DOWN'}</b> in the last window · since ${r.since}. Points are earned only when price moves AND flow agrees. <span class="dbl-hint">Double-click for chart</span></div>
+    <div class="factor"><span class="factor-n">Futures build</span><span class="factor-pts ${fs>0?'fp-up':fs<0?'fp-dn':'fp-0'}">${fs>0?'+':''}${fs}</span><span class="factor-note">futures price+OI+volume — ${fs>0.2?'bullish buildup':fs<-0.2?'bearish buildup':'neutral / warming up'}</span></div>
+    <div class="detail-foot"><b>${r.aligned}/4 forces aligned ${up?'UP':'DOWN'}</b> in the last window · since ${r.since}. Points are earned only when price moves AND flow agrees. <span class="dbl-hint">Double-click for chart</span></div>
   </div>`;
   return `<div class="row ${up?'up':'dn'}" onclick="rowClick(this,'${r.sym}')" ondblclick="rowDbl(this,'${r.sym}',event)">
     <div class="row-main">

@@ -50,6 +50,7 @@ import nifty_bias as nifty_mod
 import nifty_data as nifty_data_mod
 import nifty_signal as nifty_sig_mod
 import nifty_logger as nifty_log_mod
+import stock_futures as stock_fut_mod
 
 MARKET_START = (9, 15)
 MARKET_END   = (15, 30)
@@ -78,6 +79,9 @@ _nifty_sig = nifty_sig_mod.NiftySignalEngine()  # candle-by-candle NIFTY signal
 _nifty_candle_last = [0.0]    # last candle refresh time
 _nifty_logger = nifty_log_mod.NiftyLogger()   # logs every closed candle for backtesting
 _nifty_oi_totals = [None, None, None]         # cache: [call_oi, put_oi, fut_oi] between 30s refreshes
+_stock_fut = None             # StockFutures fetcher (set up in main when token present)
+_stock_fut_cache = [{}]       # last fetched {SYMBOL: fut_score_dict} (throttled)
+_stock_fut_last = [0.0]       # timestamp of last stock-futures fetch
 _last_flow = {}              # {sym: latest flow signal} - for search lookup
 _UI_FILE = Path(__file__).parent / "orderflow_ui.html"
 
@@ -240,7 +244,19 @@ def scanner_main(feed):
                     "bid_qty": sum(q for _, q, _ in bids),
                     "ask_qty": sum(q for _, q, _ in asks),
                 }
-            session_ranked = _session.update(sess_flows, conv_map)
+            # === per-stock FUTURES score (price + OI + volume), throttled ~45s -
+            # OI/volume don't need 4s freshness, and it's one bulk call across
+            # the whole universe (see stock_futures.py), same pattern as the
+            # NIFTY futures/OI refresh below. ===
+            try:
+                now_ts3 = time.time()
+                if _stock_fut and (now_ts3 - _stock_fut_last[0] >= 45 or not _stock_fut_cache[0]):
+                    _stock_fut_cache[0] = _stock_fut.refresh()
+                    _stock_fut_last[0] = now_ts3
+            except Exception as _e:
+                print(f"  [stock-fut] refresh error: {_e}")
+
+            session_ranked = _session.update(sess_flows, conv_map, _stock_fut_cache[0])
             _session.save()
 
             # === SECTOR HEATMAP + F&O TREEMAP (throttled ~30s) ==============
@@ -522,6 +538,15 @@ def main():
         print(f"  NIFTY data  : DISABLED - NiftyData() failed to init: {e}")
         print("                (NIFTY Direction tab will stay empty until this is fixed)")
         _nifty_data = None
+    # per-stock FUTURES score (price + OI + volume) - same lens as NIFTY's
+    # futures layer, applied to the whole F&O stock universe
+    global _stock_fut
+    try:
+        _stock_fut = stock_fut_mod.StockFutures(token, inst_map.keys())
+        print(f"  Stock futures: Upstox ({len(_stock_fut.fut_keys)} of {len(inst_map)} stocks mapped)")
+    except Exception as e:
+        print(f"  Stock futures: DISABLED - StockFutures() failed to init: {e}")
+        _stock_fut = None
     global _sectors
     try:
         _sectors = sectors_mod.Sectors(token)

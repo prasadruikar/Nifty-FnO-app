@@ -107,6 +107,17 @@ class SessionEngine:
         strength = _clamp(conv.get("conviction", 0) / 50.0, 0.0, 1.0)
         return (1 if conv.get("direction") == "up" else -1) * strength
 
+    @staticmethod
+    def _fut_bias(fut):
+        """Signed FUTURES bias, ~-1.6..+1.6 (stock_futures.py's composite of
+        futures price move + OI buildup/unwind + relative volume). Not the
+        same thing as _oi_bias above - that's OPTIONS OI (from the bridge),
+        this is the stock's own single-stock FUTURE, same lens the NIFTY
+        Direction tab already applies to the index."""
+        if not fut:
+            return 0.0
+        return _clamp(fut.get("bias", 0.0), -1.6, 1.6)
+
     def _new_stock(self, ltp, now_hhmm, now_t):
         return {
             "score": 0.0, "dir": "flat", "since": now_hhmm, "day": self.day,
@@ -114,14 +125,15 @@ class SessionEngine:
             "up_pts": 0.0, "dn_pts": 0.0,
             # current (open) window state
             "win_start": now_t, "win_anchor": ltp,
-            "book_sum": 0.0, "book_n": 0, "oi_bias": 0.0,
+            "book_sum": 0.0, "book_n": 0, "oi_bias": 0.0, "fut_bias": 0.0,
             # last CLOSED window read (for the breakdown card)
-            "w_price_pct": 0.0, "w_book_bias": 0.0, "w_oi_bias": 0.0,
+            "w_price_pct": 0.0, "w_book_bias": 0.0, "w_oi_bias": 0.0, "w_fut_bias": 0.0,
             "w_dir": "flat", "w_aligned": 0, "w_award": 0.0,
         }
 
     # ---------- the update (called every scan; commits only every 3 min) ----------
-    def update(self, flows, conv_map):
+    def update(self, flows, conv_map, fut_map=None):
+        fut_map = fut_map or {}
         now_t = time.time()
         now_hhmm = datetime.datetime.now().strftime("%H:%M")
         today = datetime.date.today().isoformat()
@@ -134,7 +146,7 @@ class SessionEngine:
             if ltp <= 0:
                 continue
             b = self.book.get(sym)
-            if not b or "win_start" not in b:
+            if not b or "win_start" not in b or "fut_bias" not in b:
                 # new stock OR an old-format record -> start fresh, never crash
                 b = self._new_stock(ltp, now_hhmm, now_t)
                 self.book[sym] = b
@@ -144,7 +156,8 @@ class SessionEngine:
             if bias is not None:
                 b["book_sum"] += bias
                 b["book_n"] += 1
-            b["oi_bias"] = self._oi_bias(conv_map.get(sym))   # latest OI read
+            b["oi_bias"] = self._oi_bias(conv_map.get(sym))    # latest OPTIONS OI read
+            b["fut_bias"] = self._fut_bias(fut_map.get(sym))   # latest FUTURES buildup read
             b["last_price"] = ltp
             b["day_chg"] = float(f.get("day_chg", 0) or 0)    # NSE-style % change
 
@@ -155,11 +168,12 @@ class SessionEngine:
         return self._ranked()
 
     def _close_window(self, b, ltp, now_t):
-        """Score the window that just ended: PRICE gates, book+OI confirm."""
+        """Score the window that just ended: PRICE gates, book+OI+futures confirm."""
         anchor = b["win_anchor"] or ltp
         price_pct = (ltp - anchor) / anchor * 100 if anchor else 0.0
         book_bias = (b["book_sum"] / b["book_n"]) if b["book_n"] else 0.0
         oi_bias = b["oi_bias"]
+        fut_bias = b.get("fut_bias", 0.0)
 
         # direction comes from PRICE and nothing else
         if price_pct > FLAT_PCT:
@@ -175,12 +189,18 @@ class SessionEngine:
             s = 1 if wdir == "up" else -1
             book_agree = s * book_bias     # +1 fully confirms .. -1 fully fights
             oi_agree = s * oi_bias
-            # confirmation: 1.0 baseline, book+OI push it up when they agree,
-            # down toward ~0 when they fight the price move.
-            conf = 1.0 + book_agree * 1.4 + oi_agree * 0.6
-            conf = _clamp(conf, 0.12, 3.2)
+            fut_agree = s * fut_bias
+            # confirmation: 1.0 baseline, book+OI+futures push it up when they
+            # agree, down toward ~0 when they fight the price move. Futures
+            # gets a weight between book (fastest, noisiest) and options OI
+            # (slowest, most deliberate) - it's price+OI+volume combined, a
+            # meaningfully strong confirming signal on its own.
+            conf = 1.0 + book_agree * 1.4 + oi_agree * 0.6 + fut_agree * 0.8
+            conf = _clamp(conf, 0.12, 3.6)
             award = abs(price_pct) * conf * SCALE
-            aligned = 1 + (1 if book_agree > 0.10 else 0) + (1 if oi_agree > 0.10 else 0)
+            aligned = (1 + (1 if book_agree > 0.10 else 0)
+                         + (1 if oi_agree > 0.10 else 0)
+                         + (1 if fut_agree > 0.10 else 0))
             if wdir == "up":
                 b["up_pts"] += award
             else:
@@ -190,6 +210,7 @@ class SessionEngine:
         b["w_price_pct"] = round(price_pct, 2)
         b["w_book_bias"] = round(book_bias, 2)
         b["w_oi_bias"] = round(oi_bias, 2)
+        b["w_fut_bias"] = round(fut_bias, 2)
         b["w_dir"] = wdir
         b["w_aligned"] = aligned
         b["w_award"] = round(award, 1)
@@ -213,7 +234,7 @@ class SessionEngine:
             if b["score"] < 1.0 or b["dir"] == "flat":
                 continue
             up = b["dir"] == "up"
-            pp = b["w_price_pct"]; bb = b["w_book_bias"]; oo = b["w_oi_bias"]
+            pp = b["w_price_pct"]; bb = b["w_book_bias"]; oo = b["w_oi_bias"]; ff = b.get("w_fut_bias", 0.0)
             reasons = []
             # price is always the reason it's ranked (it's the gate)
             if (up and pp > 0) or (not up and pp < 0):
@@ -225,15 +246,20 @@ class SessionEngine:
                 reasons.append("book fighting it")   # honest: order flow disagrees
             if s * oo > 0.10:
                 reasons.append("OI supports")
+            if s * ff > 0.10:
+                reasons.append("futures buildup confirms")
+            elif s * ff < -0.10:
+                reasons.append("futures unwinding against it")
             out.append({
                 "sym": sym,
                 "score": round(b["score"], 1),
                 "direction": b["dir"],
                 "day_chg": round(b.get("day_chg", 0), 2),
-                "aligned": b["w_aligned"],                 # 1-3 forces agreeing last window
+                "aligned": b["w_aligned"],                 # 1-4 forces agreeing last window
                 # breakdown card values reflect the LAST CLOSED 3-min window
                 "price_score": pp,                         # % price moved in the window
                 "book_score": bb,                          # avg bid/ask bias -1..+1
+                "fut_score": ff,                           # futures price+OI+volume bias -1.6..+1.6
                 "oi_score": oo,                            # OI bias -1..+1
                 "ltp": round(b["last_price"], 1),
                 "since": b["since"],
