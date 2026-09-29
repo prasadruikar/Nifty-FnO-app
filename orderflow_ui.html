@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sharp Move Finder</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0A0B0F;--bg2:#111318;--bg3:#181B22;--border:#252B38;--border2:#2E3545;
+  --text:#E8EAF0;--text2:#9BA3B5;--text3:#5A6275;
+  --green:#10D98C;--green2:#0A8A5A;--green3:#0A1F16;
+  --red:#F04E6E;--red2:#922040;--red3:#1F0D12;
+  --amber:#F5A623;--amber3:#1F1608;--blue:#4D9EFF;--blue3:#0C1A2E;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;font-size:13px}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+.hdr{background:var(--bg2);border-bottom:1px solid var(--border);padding:0 22px;height:56px;
+  display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
+.logo{font-size:17px;font-weight:900;display:flex;align-items:center;gap:9px;letter-spacing:-.3px}
+.logo-dot{width:9px;height:9px;border-radius:50%;background:var(--green);animation:pulse 2.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.status{display:flex;gap:10px;align-items:center;font-size:11px;color:var(--text3)}
+.dotmini{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;margin-right:4px}
+.dotmini.off{background:var(--red)}
+.page{max-width:1760px;margin:0 auto;padding:16px 14px 40px}
+.nifty-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:12px;align-items:start}
+@media (max-width:860px){.nifty-grid{grid-template-columns:1fr}}
+.side-card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:16px}
+.chart-scroll::-webkit-scrollbar{height:7px}
+.chart-scroll::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+#ns-chart-wrap{background:var(--bg);border:1px solid var(--border)}
+#ns-chart-wrap::-webkit-resizer{background-color:transparent}
+.filters{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
+.fbtn{padding:7px 15px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;
+  border:1px solid var(--border);background:var(--bg2);color:var(--text3);transition:all .15s}
+.fbtn:hover{color:var(--text2);border-color:var(--border2)}
+.fbtn.active{background:var(--text);color:var(--bg);border-color:var(--text)}
+.fbtn.active.up{background:var(--green);color:#00110A;border-color:var(--green)}
+.fbtn.active.dn{background:var(--red);color:#150007;border-color:var(--red)}
+.hint{font-size:11px;color:var(--text3);margin-bottom:14px;line-height:1.6}
+.list{display:flex;flex-direction:column;gap:8px}
+.row{background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden;
+  cursor:pointer;transition:border-color .15s}
+.row:hover{border-color:var(--border2)}
+.row.up{border-left:4px solid var(--green)}
+.row.dn{border-left:4px solid var(--red)}
+.row.aligned{border-color:var(--amber)}
+.row-main{padding:13px 18px;display:flex;align-items:center;gap:15px}
+.rank{font-size:13px;font-weight:900;color:var(--text3);min-width:20px;text-align:center}
+.rank.g{color:var(--amber)}
+.info{flex:1;min-width:0}
+.top{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.sym{font-size:17px;font-weight:900;letter-spacing:-.3px}
+.action{font-size:10px;font-weight:900;padding:3px 10px;border-radius:6px;letter-spacing:.4px}
+.act-buy{background:var(--green);color:#00140B}.act-sell{background:var(--red);color:#180008}
+.align-tag{font-size:9px;font-weight:800;padding:3px 9px;border-radius:20px;background:var(--amber3);color:var(--amber);border:1px solid #4A3410}
+.subline{font-size:11px;color:var(--text2);margin-top:4px}
+.right{display:flex;align-items:center;gap:16px;flex-shrink:0}
+.ltp{text-align:right}
+.ltp-v{font-size:13px;font-weight:700;color:var(--text2)}
+.ltp-l{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.3px}
+.score{text-align:right;min-width:48px}
+.score-v{font-size:28px;font-weight:900;line-height:1}
+.score-l{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px}
+.sg{color:var(--green)}.sr{color:var(--red)}
+.expand{font-size:10px;color:var(--text3);padding:4px 18px;background:var(--bg3);border-top:1px solid var(--border);display:flex;align-items:center;gap:5px}
+.earr{transition:transform .2s}.row.open .earr{transform:rotate(180deg)}
+/* factor breakdown */
+.detail{display:none;padding:12px 18px 15px;border-top:1px solid var(--border);background:#0C0E13}
+.row.open .detail{display:block}
+.detail-hd{font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+.factor{display:grid;grid-template-columns:120px 60px 1fr;align-items:center;gap:10px;padding:5px 0}
+.factor-n{font-size:11px;font-weight:700}
+.factor-pts{font-size:12px;font-weight:800;text-align:right}
+.fp-up{color:var(--green)}.fp-dn{color:var(--red)}.fp-0{color:var(--text3)}
+.factor-bar-wrap{display:flex;align-items:center;gap:8px}
+.factor-bar{flex:1;height:6px;background:var(--bg3);border-radius:3px;overflow:hidden}
+.factor-fill{height:100%;border-radius:3px}
+.ff-up{background:var(--green)}.ff-dn{background:var(--red)}.ff-0{background:var(--text3)}
+.factor-note{font-size:10px;color:var(--text3)}
+.detail-foot{font-size:10px;color:var(--text3);margin-top:10px;padding-top:10px;border-top:1px solid var(--border);line-height:1.5}
+.detail-foot b{color:var(--text2)}
+.dbl-hint{font-size:9px;color:var(--text3);margin-top:6px;font-style:italic}
+.empty{padding:56px 24px;text-align:center;background:var(--bg2);border:1px dashed var(--border2);border-radius:14px}
+.empty-big{font-size:16px;font-weight:800;color:var(--text2);margin-bottom:8px}
+.empty-sub{font-size:13px;color:var(--text3);line-height:1.7}
+.wd{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--text3);animation:pulse 1.6s infinite;margin-left:4px}
+.err{background:var(--red3);border:1px solid var(--red2);color:var(--red);padding:9px 15px;border-radius:9px;font-size:12px;margin-bottom:14px;display:none}
+.err.show{display:block}
+footer{text-align:center;padding:18px;color:var(--text3);font-size:11px;border-top:1px solid var(--border);margin-top:28px;line-height:1.8}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <div class="logo"><span class="logo-dot"></span>Sharp Move Finder</div>
+  <div class="status">
+    <span><span class="dotmini" id="d-flow"></span>Depth</span>
+    <span><span class="dotmini" id="d-oi"></span>OI</span>
+    <span>next <b id="ns" style="color:var(--text)">--</b>s</span>
+  </div>
+</div>
+
+<div class="page">
+  <div class="err" id="err"></div>
+
+  <div class="tabs" style="display:flex;gap:4px;margin-bottom:16px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:4px">
+    <button class="tab active" id="tab-scan" onclick="showTab('scan')" style="flex:1;padding:9px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;color:var(--green);background:var(--green3);border:none">Sharp Moves</button>
+    <button class="tab" id="tab-heat" onclick="showTab('heat')" style="flex:1;padding:9px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;color:var(--text3);background:transparent;border:none">Heatmap</button>
+    <button class="tab" id="tab-nifty" onclick="showTab('nifty')" style="flex:1;padding:9px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;color:var(--text3);background:transparent;border:none">NIFTY Direction</button>
+  </div>
+
+  <div id="view-scan">
+  <div class="hint">Scored once every <b style="color:var(--text2)">3 minutes</b>. A stock only earns points if <b style="color:var(--text2)">price actually moved</b> that way in the window — buyers/sellers &amp; OI only add weight when they agree with the move, and shrink it when they fight it. Score builds through the day and never drops. Click a row for the breakdown · double-click for the chart.</div>
+
+  <div style="position:relative;margin-bottom:14px">
+    <span style="position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:15px">&#9906;</span>
+    <input id="stock-search" type="text" autocomplete="off" spellcheck="false" placeholder="Search any F&O stock..." oninput="onSearch()"
+      style="width:100%;background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:11px 14px 11px 38px;color:var(--text);font-family:Inter;font-size:14px;font-weight:600;outline:none"/>
+    <span id="search-clear" onclick="clearSearch()" style="position:absolute;right:13px;top:50%;transform:translateY(-50%);font-size:9px;font-weight:700;color:var(--text3);cursor:pointer;text-transform:uppercase;display:none">clear</span>
+  </div>
+  <div id="search-result"></div>
+
+  <div class="filters">
+    <button class="fbtn active" data-f="all" onclick="setF('all',this)">All</button>
+    <button class="fbtn" data-f="up" onclick="setF('up',this)">Buy calls</button>
+    <button class="fbtn" data-f="down" onclick="setF('down',this)">Buy puts</button>
+  </div>
+
+  <div class="list" id="list">
+    <div class="empty"><div class="empty-big">Building today's picture<span class="wd"></span></div><div class="empty-sub">Stocks accumulate strength as the day develops.<br>The steady movers rise to the top.</div></div>
+  </div>
+
+  </div><!-- view-scan -->
+
+  <div id="view-heat" style="display:none">
+    <div style="font-size:12px;font-weight:800;margin-bottom:8px">Sector Performance</div>
+    <div id="sector-strip" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:20px"></div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
+      <div style="font-size:12px;font-weight:800" id="treemap-title">F&O Stocks — sized by today's move, grouped by sector</div>
+      <div id="treemap-clear" onclick="filterSector(null)" style="display:none;font-size:10.5px;font-weight:700;color:var(--blue);cursor:pointer;background:var(--blue3);border:1px solid #1c3a5e;border-radius:6px;padding:3px 9px">✕ show all sectors</div>
+    </div>
+    <div style="font-size:10px;color:var(--text3);margin-bottom:10px">Bigger tile = bigger % move today. Green = up, red = down. Click a sector chip above to zoom into just that sector. Double-click a stock for its chart.</div>
+    <div id="treemap" style="position:relative;width:100%;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#0b0e14"></div>
+  </div>
+
+  <div id="view-nifty" style="display:none">
+    <div class="nifty-grid">
+      <!-- LEFT: THE CHART — price candles on top, positioning buildup bars below -->
+      <div class="side-card" style="padding:10px 8px 8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:0 6px;margin-bottom:6px;flex-wrap:wrap;gap:6px">
+          <div style="font-size:12px;font-weight:800">NIFTY — price vs positioning buildup</div>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <div style="font-size:9px;color:var(--text3);display:flex;gap:10px;flex-wrap:wrap">
+              <span><span style="display:inline-block;width:8px;height:8px;background:var(--green);border-radius:2px"></span> bullish build</span>
+              <span><span style="display:inline-block;width:8px;height:8px;background:var(--red);border-radius:2px"></span> bearish build</span>
+              <span><span style="display:inline-block;width:8px;height:8px;border:2px solid var(--amber);border-radius:2px"></span> divergence</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px;background:var(--bg3)">
+              <button onclick="niftyZoom(-3)" title="Zoom out (wider view) — or scroll down over the chart" style="width:22px;height:20px;border:none;background:transparent;color:var(--text2);font-size:13px;font-weight:800;cursor:pointer;border-radius:5px;line-height:1">−</button>
+              <button onclick="niftyZoom(0)" title="Reset zoom" style="padding:0 7px;height:20px;border:none;background:transparent;color:var(--text3);font-size:9px;font-weight:700;cursor:pointer;border-radius:5px">RESET</button>
+              <button onclick="niftyZoom(3)" title="Zoom in (bigger candles) — or scroll up over the chart" style="width:22px;height:20px;border:none;background:transparent;color:var(--text2);font-size:13px;font-weight:800;cursor:pointer;border-radius:5px;line-height:1">+</button>
+            </div>
+          </div>
+        </div>
+        <div id="ns-chart-wrap" style="resize:vertical;overflow:hidden;min-height:420px;height:720px;max-height:1200px;border-radius:8px">
+          <div id="ns-chart" class="chart-scroll" style="width:100%;height:100%;overflow-x:auto;overflow-y:hidden;cursor:grab;position:relative"></div>
+        </div>
+        <div style="font-size:9px;color:var(--text3);text-align:right;padding:2px 6px 0">↕ drag the bottom-right corner to resize · click-drag to pan · scroll to zoom</div>
+        <div style="font-size:9.5px;color:var(--text3);padding:6px 6px 0;line-height:1.5">Top = NIFTY price candles. Bottom bars = positioning built on each candle, blending OPTIONS OI (call/put) and FUTURES OI (buildup vs covering/unwinding). Hover a candle for the breakdown. Amber = options positioning fighting price = trap forming.</div>
+      </div>
+
+      <!-- RIGHT: compact signal + dials + verdict, sidebar style -->
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div id="nifty-signal-card" class="side-card" style="text-align:center;border:2px solid var(--border)">
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">NIFTY Option Signal (3-min)</div>
+          <div style="display:flex;align-items:baseline;justify-content:center;gap:8px;margin-top:2px">
+            <div id="ns-signal" style="font-size:24px;font-weight:900;line-height:1">WAIT</div>
+            <div id="ns-strength-lbl" style="font-size:10px;font-weight:700;color:var(--text3)">strength --</div>
+          </div>
+          <div id="ns-note" style="font-size:10.5px;color:var(--text3);margin-top:5px;line-height:1.4">warming up</div>
+          <div id="ns-dials" style="display:flex;gap:8px;flex-wrap:nowrap;justify-content:center;margin-top:12px"></div>
+        </div>
+
+        <div id="nifty-verdict" class="side-card" style="text-align:center">
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Market Direction</div>
+          <div id="nv-verdict" style="font-size:22px;font-weight:900">Analyzing...</div>
+          <div id="nv-sub" style="font-size:11px;color:var(--text3);margin-top:5px;line-height:1.4">waiting for data</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="nifty-lenses" style="display:flex;flex-direction:column;gap:8px;margin-top:14px"></div>
+    <div style="font-size:11px;color:var(--text3);margin-top:14px;line-height:1.6;text-align:center">Each lens votes independently. When most agree, the direction is high-confidence. 1-2 agreeing = noise, 5-6 = strong trend.</div>
+  </div>
+
+  <footer>Live 30-level depth via Upstox · Score by sharp-move ability (higher = stronger, no ceiling)<br>Paper trade &amp; log before real money · Exit by 2:30 PM</footer>
+</div>
+
+<script>
+function showTab(t){
+  document.getElementById('view-scan').style.display=t==='scan'?'':'none';
+  document.getElementById('view-heat').style.display=t==='heat'?'':'none';
+  document.getElementById('view-nifty').style.display=t==='nifty'?'':'none';
+  const ts=document.getElementById('tab-scan'),th=document.getElementById('tab-heat'),tn=document.getElementById('tab-nifty');
+  [ts,th,tn].forEach(b=>{b.style.color='var(--text3)';b.style.background='transparent';});
+  if(t==='scan'){ts.style.color='var(--green)';ts.style.background='var(--green3)';}
+  else if(t==='heat'){th.style.color='var(--amber)';th.style.background='var(--amber3)';}
+  else{tn.style.color='var(--blue)';tn.style.background='var(--blue3)';}
+  // the treemap needs a real (non-zero) width to lay out, so (re)draw it the
+  // moment the heat tab becomes visible.
+  if(t==='heat'&&_lastHeat){renderHeatmap(_lastHeat.sectorPerf,_lastHeat.treemap);}
+  // same idea for the NIFTY chart's auto-scroll-to-latest: if it rendered
+  // while this tab was hidden (0 width), scrollWidth read as 0 then - fix it
+  // up now that the tab has a real width.
+  if(t==='nifty'){const h=document.getElementById('ns-chart'); if(h) h.scrollLeft=h.scrollWidth;}
+}
+window.addEventListener('resize',()=>{if(_lastHeat&&document.getElementById('view-heat').style.display!=='none')renderHeatmap(_lastHeat.sectorPerf,_lastHeat.treemap);});
+var _lastHeat=null;
+function heatColor(chg){
+  if(chg>=2)return'#0A6A3A';if(chg>=1)return'#0D8A4A';if(chg>=0.3)return'#12A058';
+  if(chg>=-0.3)return'#252B38';if(chg>=-1)return'#8A2030';if(chg>=-2)return'#A82038';return'#C82040';
+}
+// ---- squarified treemap (Bruls, Huizing, van Wijk) -------------------------
+// Lays a set of {value} nodes into a rect so each tile's AREA is proportional
+// to its value, keeping tiles close to square. Mutates nodes with x,y,w,h.
+function _worstRatio(row,sum,short){
+  const thick=sum/short; let worst=1;
+  for(const n of row){const other=n._a/thick;const r=Math.max(thick/other,other/thick);if(r>worst)worst=r;}
+  return worst;
+}
+function squarify(nodes,x,y,w,h){
+  nodes=nodes.slice().sort((a,b)=>b.value-a.value);
+  const total=nodes.reduce((s,n)=>s+n.value,0)||1;
+  const scale=(w*h)/total; nodes.forEach(n=>n._a=n.value*scale);
+  const out=[]; let rx=x,ry=y,rw=w,rh=h,i=0;
+  while(i<nodes.length){
+    let row=[],rowSum=0,best=Infinity; const short=Math.min(rw,rh)||1;
+    while(i<nodes.length){
+      const testSum=rowSum+nodes[i]._a;
+      const ratio=_worstRatio(row.concat([nodes[i]]),testSum,short);
+      if(row.length===0||ratio<=best){row.push(nodes[i]);rowSum=testSum;best=ratio;i++;}
+      else break;
+    }
+    if(rw>=rh){const colW=rowSum/(rh||1);let yy=ry;for(const n of row){const hh=n._a/(colW||1);n.x=rx;n.y=yy;n.w=colW;n.h=hh;yy+=hh;out.push(n);}rx+=colW;rw-=colW;}
+    else{const rowH=rowSum/(rw||1);let xx=rx;for(const n of row){const ww=n._a/(rowH||1);n.x=xx;n.y=ry;n.w=ww;n.h=rowH;xx+=ww;out.push(n);}ry+=rowH;rh-=rowH;}
+  }
+  return out;
+}
+let _heatFilterSector=null;   // set by clicking a sector chip -> zoom the treemap into just that sector
+function filterSector(name){
+  _heatFilterSector = (_heatFilterSector===name) ? null : name;   // click active chip again to clear
+  if(_lastHeat) renderHeatmap(_lastHeat.sectorPerf, _lastHeat.treemap);
+}
+function renderHeatmap(sectorPerf, treemap){
+  _lastHeat={sectorPerf,treemap};
+  // ---- sector strip (which sector moved how much) — click a chip to zoom the treemap into just that sector ----
+  const strip=document.getElementById('sector-strip');
+  if(strip){
+    if(!sectorPerf||!sectorPerf.length){strip.innerHTML='<span style="color:var(--text3);font-size:11px">Sector data loads during market hours</span>';}
+    else{
+      strip.innerHTML=sectorPerf.map((s,i)=>{
+        const active=_heatFilterSector===s.name;
+        return `<div data-sec-i="${i}" title="Click to zoom into ${s.name} stocks"
+          style="background:${heatColor(s.chg)};border-radius:8px;padding:8px 12px;min-width:90px;cursor:pointer;
+          border:2px solid ${active?'#fff':'transparent'};box-shadow:${active?'0 0 0 2px rgba(255,255,255,.25)':'none'}">
+          <div style="font-size:12px;font-weight:800;color:#fff">${s.name}</div>
+          <div style="font-size:14px;font-weight:900;color:#fff">${s.chg>=0?'+':''}${s.chg}%</div>
+        </div>`;
+      }).join('');
+      // bind (or rebind, since the chip set can change size day to day) —
+      // event delegation off _sectorPerf-by-index avoids any quoting issues
+      // with sector names like "Oil & Gas".
+      strip._sectorPerf = sectorPerf;
+      if(!strip._clickBound){
+        strip._clickBound = true;
+        strip.addEventListener('click', e=>{
+          const chip = e.target.closest('[data-sec-i]');
+          if(!chip || !strip._sectorPerf) return;
+          const s = strip._sectorPerf[parseInt(chip.dataset.secI)];
+          if(s) filterSector(s.name);
+        });
+      }
+    }
+  }
+  // ---- title / clear-filter affordance ----
+  const titleEl=document.getElementById('treemap-title'), clearEl=document.getElementById('treemap-clear');
+  if(titleEl){
+    titleEl.textContent = _heatFilterSector
+      ? `F&O Stocks — ${_heatFilterSector} sector`
+      : "F&O Stocks — sized by today's move, grouped by sector";
+  }
+  if(clearEl) clearEl.style.display = _heatFilterSector ? '' : 'none';
+  // ---- ONE rectangular box: nested treemap, tile area = |% move| ----
+  const host=document.getElementById('treemap');
+  if(!host)return;
+  const W=host.clientWidth||host.offsetWidth||900;
+  if(!treemap||!treemap.length){host.style.height='120px';host.innerHTML='<div style="padding:40px;text-align:center;color:var(--text3)">Treemap loads during market hours</div>';return;}
+  const H=Math.round(Math.max(520,Math.min(760,W*0.72)));
+  host.style.height=H+'px';
+  // ---- sector filter: zoom into just the clicked sector's stocks ----
+  let activeTreemap = treemap;
+  if(_heatFilterSector){
+    activeTreemap = treemap.filter(sec=>sec.sector===_heatFilterSector);
+    if(!activeTreemap.length){
+      host.innerHTML=`<div style="padding:40px;text-align:center;color:var(--text3)">No F&O stocks mapped to the <b>${_heatFilterSector}</b> sector yet.<br>
+        <span onclick="filterSector(null)" style="color:var(--blue);cursor:pointer;text-decoration:underline">← show all sectors</span></div>`;
+      return;
+    }
+    // single sector, no label band needed — its stocks fill the whole box
+    const stkNodes=activeTreemap[0].stocks.map(s=>({s,value:Math.max(0.08,Math.abs(s.chg)||0.08)}));
+    const placed=squarify(stkNodes,0,0,W,H);
+    let html='';
+    for(const p of placed){
+      const w=Math.max(0,p.w-2),h=Math.max(0,p.h-2),area=w*h;
+      const s=p.s;
+      const showSym=area>260&&w>24, showPct=area>1200&&h>24;
+      const byArea=Math.sqrt(area)/6, byWidth=(w-4)/(s.sym.length*0.58);
+      const fs=Math.max(8,Math.min(20,byArea,byWidth));
+      html+=`<div title="${s.sym} ${s.chg>=0?'+':''}${s.chg}%" ondblclick="tvChart('${s.sym}')"
+        style="position:absolute;left:${p.x+1}px;top:${p.y+1}px;width:${w}px;height:${h}px;
+        background:${heatColor(s.chg)};border-radius:4px;cursor:pointer;overflow:hidden;
+        display:flex;flex-direction:column;justify-content:center;align-items:center;box-sizing:border-box;padding:2px">
+        ${showSym?`<div style="font-size:${fs}px;font-weight:800;color:#fff;text-align:center;line-height:1.1;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.sym}</div>`:''}
+        ${showPct?`<div style="font-size:${Math.max(8,fs-4)}px;font-weight:700;color:rgba(255,255,255,.9)">${s.chg>=0?'+':''}${s.chg}%</div>`:''}
+      </div>`;
+    }
+    host.innerHTML=html;
+    return;
+  }
+  // sector nodes: value = summed |move| of its stocks (so a hot sector = big region)
+  const secNodes=treemap.map(sec=>({sec,value:Math.max(0.4,sec.stocks.reduce((a,s)=>a+(Math.abs(s.chg)||0.1),0)),avg:sec.avg}));
+  const placedSecs=squarify(secNodes,0,0,W,H);
+  const PAD=2, HEAD=15;                 // gap between sectors + sector-label band
+  let html='';
+  for(const sn of placedSecs){
+    const sx=sn.x+PAD, sy=sn.y+PAD, sw=Math.max(0,sn.w-PAD*2), sh=Math.max(0,sn.h-PAD*2);
+    // sector label band (only if the region is tall/wide enough to read)
+    const showHead=sh>HEAD+18&&sw>54;
+    const avgCol=sn.avg>=0?'#3ad07f':'#e05563';
+    if(showHead){
+      html+=`<div style="position:absolute;left:${sx}px;top:${sy}px;width:${sw}px;height:${HEAD}px;
+        display:flex;align-items:center;gap:6px;padding:0 4px;box-sizing:border-box;overflow:hidden;
+        font-size:10px;font-weight:800;color:var(--text2);letter-spacing:.02em;white-space:nowrap">
+        ${sn.sec.sector}<span style="color:${avgCol};font-weight:900">${sn.avg>=0?'+':''}${sn.avg}%</span></div>`;
+    }
+    // stock tiles fill the region below the label band
+    const inX=sx, inY=sy+(showHead?HEAD:0), inW=sw, inH=Math.max(0,sh-(showHead?HEAD:0));
+    const stkNodes=sn.sec.stocks.map(s=>({s,value:Math.max(0.08,Math.abs(s.chg)||0.08)}));
+    const placed=squarify(stkNodes,inX,inY,inW,inH);
+    for(const p of placed){
+      const w=Math.max(0,p.w-1),h=Math.max(0,p.h-1),area=w*h;
+      const s=p.s;
+      const showSym=area>520&&w>30;      // only label tiles big enough to read
+      const showPct=area>2000&&h>28;
+      // font scales with area, but is clamped so a long symbol still FITS the
+      // tile width (prevents labels bleeding across narrow tiles).
+      const byArea=Math.sqrt(area)/7;
+      const byWidth=(w-4)/(s.sym.length*0.60);
+      const fs=Math.max(7,Math.min(15,byArea,byWidth));
+      html+=`<div title="${s.sym} ${s.chg>=0?'+':''}${s.chg}%" ondblclick="tvChart('${s.sym}')"
+        style="position:absolute;left:${p.x}px;top:${p.y}px;width:${w}px;height:${h}px;
+        background:${heatColor(s.chg)};border-radius:3px;cursor:pointer;overflow:hidden;
+        display:flex;flex-direction:column;justify-content:center;align-items:center;box-sizing:border-box;padding:1px">
+        ${showSym?`<div style="font-size:${fs}px;font-weight:800;color:#fff;text-align:center;line-height:1.03;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.sym}</div>`:''}
+        ${showPct?`<div style="font-size:${Math.max(7,fs-3)}px;font-weight:700;color:rgba(255,255,255,.9)">${s.chg>=0?'+':''}${s.chg}%</div>`:''}
+      </div>`;
+    }
+  }
+  host.innerHTML=html;
+}
+let _niftyCandleW = Math.max(5, Math.min(40, parseInt(localStorage.getItem('ns_candle_w'))||14));
+let _lastNiftyChartData = null;
+let _chartMeta = null;   // layout numbers from the last render, reused by the crosshair on every mousemove
+function niftyZoom(delta){
+  const host=document.getElementById('ns-chart');
+  // keep the same point in time under the same scroll position while zooming
+  const oldW = host && host.scrollWidth ? host.scrollWidth : 1;
+  const oldLeft = host ? host.scrollLeft : 0;
+  const wasAtEnd = host ? (oldLeft + host.clientWidth >= oldW - 4) : true;
+  _niftyCandleW = delta===0 ? 14 : Math.max(5, Math.min(40, _niftyCandleW + delta));
+  try{ localStorage.setItem('ns_candle_w', _niftyCandleW); }catch(e){}
+  if(_lastNiftyChartData) renderChart(_lastNiftyChartData);
+  if(host){
+    if(wasAtEnd){ host.scrollLeft = host.scrollWidth; }
+    else{ host.scrollLeft = oldLeft * (host.scrollWidth / oldW); }
+  }
+}
+function renderChart(data){
+  const host=document.getElementById('ns-chart');
+  if(!host)return;
+  if(!data||!data.length){host.innerHTML='<div style="padding:40px;text-align:center;color:var(--text3);font-size:12px">Connecting to Upstox… the full day of candles loads on the first scan (a few seconds).<br>If this stays empty, check the terminal for <b style="color:var(--amber)">[nifty] candles</b> messages.</div>';return;}
+  _lastNiftyChartData = data;
+  const n=data.length;
+  const cw=_niftyCandleW, gap=Math.max(2,Math.round(cw*0.32)), slot=cw+gap; // adjustable via the +/− zoom controls / mouse wheel
+  const W=n*slot+44, priceH=300, volH=190, pad=22, axo=34, gapPV=22, axisH=20; // axo = left axis offset, gapPV = gap between price/build panels
+  const H=pad+priceH+gapPV+volH+axisH+6;   // fits both panels + time axis
+  // stash layout metadata for the crosshair (reused on every mousemove, not recomputed there)
+  _chartMeta={W,H,pad,priceH,axo,axisY:0,slot,cw,n,data};   // axisY filled in below once known
+  // price scale
+  const highs=data.map(d=>d.h), lows=data.map(d=>d.l);
+  const pMax=Math.max(...highs), pMin=Math.min(...lows);
+  const pRange=(pMax-pMin)||1;
+  const yP=v=>pad+(pMax-v)/pRange*priceH;
+  Object.assign(_chartMeta,{pMax,pMin,pRange});
+  // positioning scale (symmetric around 0) — only from candles that HAVE data
+  const flows=data.filter(d=>d.pos_flow!=null).map(d=>Math.abs(d.pos_flow));
+  const fMax=Math.max(...flows,0.001);
+  const volTop=pad+priceH+gapPV, volMid=volTop+volH/2;   // zero line (center of the build panel)
+  const gv=v=>Math.min(volH/2-3, Math.abs(v)/fMax*(volH/2-3));
+  const axisY=volTop+volH+axisH-6;
+  _chartMeta.axisY=axisY; _chartMeta.volTop=volTop; _chartMeta.volH=volH;
+  let svg=`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="font-family:Inter">`;
+  // ---- background grid: faint horizontal price gridlines (Upstox-style) ----
+  for(let g=1;g<4;g++){
+    const gy=pad+priceH/4*g;
+    svg+=`<line x1="${axo}" y1="${gy}" x2="${W-6}" y2="${gy}" stroke="#151923" stroke-width="1"/>`;
+  }
+  // ---- vertical time gridlines + HH:MM labels (like a real trading chart) ----
+  // pick a tick spacing so labels don't overlap even when zoomed out: aim for
+  // roughly one label every ~90px of rendered width.
+  const targetPx=90;
+  const everyN=Math.max(1, Math.round(targetPx/slot));
+  for(let i=0;i<n;i++){
+    if(i%everyN!==0 && i!==n-1) continue;
+    const x=axo+6+i*slot+cw/2;
+    svg+=`<line x1="${x}" y1="${pad-4}" x2="${x}" y2="${axisY-8}" stroke="#1a1f2b" stroke-width="1" stroke-dasharray="2 4"/>`;
+    const lbl=data[i].ts?String(data[i].ts).slice(11,16):'';
+    if(lbl) svg+=`<text x="${x}" y="${axisY+9}" fill="#4a5261" font-size="9.5" text-anchor="middle">${lbl}</text>`;
+  }
+  // panel separator + zero line
+  svg+=`<line x1="${axo}" y1="${volTop-10}" x2="${W-6}" y2="${volTop-10}" stroke="#1c2230" stroke-width="1"/>`;
+  svg+=`<line x1="${axo}" y1="${volMid}" x2="${W-6}" y2="${volMid}" stroke="#242a38" stroke-width="1"/>`;
+  let anyBuild=false;
+  data.forEach((d,i)=>{
+    const x=axo+6+i*slot+cw/2;
+    const up=d.c>=d.o;
+    const col=up?'#10D98C':'#F04E6E';
+    const futLbl={LB:'long buildup',SC:'short covering',SB:'short buildup',LU:'long unwinding'}[d.fut_type]||'';
+    const ttl=`${d.ts?String(d.ts).slice(11,16):''}  O${d.o} H${d.h} L${d.l} C${d.c}`+
+              (d.pos_flow!=null?`  ·  build ${d.build_dir||'flat'}`:'  ·  positioning: no data yet')+
+              (d.pos_type?`  ·  options: ${d.pos_type} (raw ${d.pos_raw})`:'')+
+              (d.fut_type?`  ·  futures: ${d.fut_type} - ${futLbl} (raw ${d.fut_raw})`:'')+
+              (d.divergence?'  ·  DIVERGENCE (trap - options fighting price)':'');
+    // ---- price candle (rounded, thin wick) ----
+    svg+=`<line x1="${x}" y1="${yP(d.h)}" x2="${x}" y2="${yP(d.l)}" stroke="${col}" stroke-width="1.3" stroke-linecap="round"/>`;
+    const yo=yP(d.o), yc=yP(d.c);
+    const bt=Math.min(yo,yc), bh=Math.max(1.6,Math.abs(yc-yo));
+    const bw=Math.max(2,cw-Math.max(1,Math.round(cw*0.18)));
+    svg+=`<rect x="${x-bw/2}" y="${bt}" width="${bw}" height="${bh}" fill="${col}" rx="${Math.min(2.5,bw/3)}"><title>${ttl}</title></rect>`;
+    if(d.divergence){
+      svg+=`<rect x="${x-bw/2-1.5}" y="${bt-1.5}" width="${bw+3}" height="${bh+3}" fill="none" stroke="#F5A623" stroke-width="1.5" rx="3"/>`;
+    }
+    // ---- positioning buildup bar (scored, continuous volume-style) ----
+    const pf=d.pos_flow;
+    if(pf==null){
+      // no OI measured for this candle yet — faint neutral tick on the zero line
+      svg+=`<rect x="${x-bw/2}" y="${volMid-1}" width="${bw}" height="2" fill="#242a38" rx="1"><title>${ttl}</title></rect>`;
+      return;
+    }
+    anyBuild=true;
+    const barCol=pf>0?'#10D98C':pf<0?'#F04E6E':'#5A6275';
+    const bh2=Math.max(1.6,gv(pf));
+    const yBar=pf>=0?volMid-bh2:volMid;
+    svg+=`<rect x="${x-bw/2}" y="${yBar}" width="${bw}" height="${bh2}" fill="${barCol}" rx="${Math.min(1.5,bw/4)}" opacity="0.85"><title>${ttl}</title></rect>`;
+    if(d.divergence){
+      svg+=`<rect x="${x-bw/2-1}" y="${yBar-1}" width="${bw+2}" height="${bh2+2}" fill="none" stroke="#F5A623" stroke-width="1.2" rx="2"/>`;
+    }
+  });
+  // axis labels
+  svg+=`<text x="2" y="${pad+9}" fill="#5A6275" font-size="10">${pMax.toFixed(0)}</text>`;
+  svg+=`<text x="2" y="${pad+priceH}" fill="#5A6275" font-size="10">${pMin.toFixed(0)}</text>`;
+  svg+=`<text x="2" y="${volMid-volH/2+11}" fill="#3aa06a" font-size="9">bull</text>`;
+  svg+=`<text x="2" y="${volMid+volH/2-2}" fill="#c0556a" font-size="9">bear</text>`;
+  svg+=`<text x="${axo+2}" y="${volTop-14}" fill="#4a5261" font-size="9">position buildup (scored — price-confirmed)</text>`;
+  if(!anyBuild){
+    svg+=`<text x="${W/2}" y="${volMid+4}" fill="#5A6275" font-size="10" text-anchor="middle">positioning fills in as option OI updates (live)</text>`;
+  }
+  svg+=`</svg>`;
+  const withBuild=data.filter(d=>d.pos_flow!=null).length;
+  const lastTs=data[data.length-1].ts?String(data[data.length-1].ts).slice(11,16):'';
+  const cap=`<div style="font-size:10px;color:var(--text3);padding:2px 6px 6px">
+    <b style="color:var(--green)">● live</b> · ${n} candles · ${withBuild} with positioning · last ${lastTs}</div>`;
+  // ---- TradingView-style crosshair overlay: lives in its own positioning
+  // context (#ns-chart-plot) whose top-left == the svg's (0,0), so overlay
+  // pixel coords match the svg's viewBox 1:1 with no extra math needed. ----
+  const crosshair=`
+    <div id="ns-cross-v" style="position:absolute;top:0;bottom:0;width:1px;background:rgba(232,234,240,.35);display:none;pointer-events:none"></div>
+    <div id="ns-cross-h" style="position:absolute;left:0;right:0;height:1px;background:rgba(232,234,240,.35);display:none;pointer-events:none"></div>
+    <div id="ns-cross-price" style="position:absolute;display:none;background:#232a3a;color:#E8EAF0;font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;pointer-events:none;white-space:nowrap;transform:translateY(-50%)"></div>
+    <div id="ns-cross-time" style="position:absolute;display:none;background:#232a3a;color:#E8EAF0;font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;pointer-events:none;white-space:nowrap;transform:translateX(-50%)"></div>`;
+  host.innerHTML=cap+`<div id="ns-chart-plot" style="position:relative;display:inline-block">${svg}${crosshair}</div>`;
+  // auto-scroll to the LATEST candles by default, so the current picture is
+  // visible on load without the user having to manually scroll/drag first.
+  host.scrollLeft = host.scrollWidth;
+  // click-and-drag panning + crosshair + wheel-zoom (bound once — host
+  // itself persists across re-renders since only its innerHTML is replaced).
+  if(!host._dragBound){
+    host._dragBound = true;
+    let isDown=false, startX=0, startScroll=0, moved=false;
+    host.addEventListener('mousedown', e=>{
+      isDown=true; moved=false; startX=e.pageX; startScroll=host.scrollLeft;
+      host.style.cursor='grabbing';
+    });
+    window.addEventListener('mouseup', ()=>{isDown=false; host.style.cursor='grab';});
+    host.addEventListener('mouseleave', ()=>{
+      if(isDown){isDown=false; host.style.cursor='grab';}
+      const v=document.getElementById('ns-cross-v'),h=document.getElementById('ns-cross-h'),
+            p=document.getElementById('ns-cross-price'),t=document.getElementById('ns-cross-time');
+      [v,h,p,t].forEach(el=>{if(el)el.style.display='none';});
+    });
+    host.addEventListener('mousemove', e=>{
+      if(isDown){
+        e.preventDefault();
+        const dx=e.pageX-startX;
+        if(Math.abs(dx)>3) moved=true;
+        host.scrollLeft = startScroll - dx;
+      }
+      // ---- crosshair follow ----
+      const plot=document.getElementById('ns-chart-plot'), m=_chartMeta;
+      if(!plot || !m) return;
+      const rect=plot.getBoundingClientRect();
+      const x=e.clientX-rect.left, y=e.clientY-rect.top;
+      const v=document.getElementById('ns-cross-v'),h=document.getElementById('ns-cross-h'),
+            p=document.getElementById('ns-cross-price'),t=document.getElementById('ns-cross-time');
+      if(!v||!h||!p||!t) return;
+      if(x<0||x>m.W||y<0||y>m.H){ v.style.display=h.style.display=p.style.display=t.style.display='none'; return; }
+      v.style.display=h.style.display=p.style.display=t.style.display='';
+      v.style.left=x+'px';
+      h.style.top=y+'px';
+      // price tag: follows cursor Y, pinned to the right edge of the VISIBLE
+      // viewport (not the full scrollable width) — same convention TradingView uses.
+      const priceVal=m.pMax-(y-m.pad)/m.priceH*m.pRange;
+      p.textContent=priceVal.toFixed(1);
+      const viewRight=host.scrollLeft+host.clientWidth;
+      p.style.left=Math.min(m.W-4,viewRight-4)+'px'; p.style.top=y+'px';
+      p.style.transform='translate(-100%,-50%)';
+      // time tag: follows cursor X, pinned just under the time axis
+      let idx=Math.round((x-m.axo-6-m.cw/2)/m.slot);
+      idx=Math.max(0,Math.min(m.n-1,idx));
+      const ts=m.data[idx].ts?String(m.data[idx].ts).slice(11,16):'';
+      t.textContent=ts;
+      t.style.left=x+'px'; t.style.top=(m.axisY+3)+'px';
+    });
+    // a drag shouldn't also register as a candle-hover click/tooltip flicker
+    host.addEventListener('click', e=>{ if(moved){ e.stopPropagation(); } }, true);
+    // ---- scroll wheel to zoom, anchored under the cursor (TradingView-style) ----
+    host.addEventListener('wheel', e=>{
+      if(!_lastNiftyChartData) return;
+      e.preventDefault();
+      const rect=host.getBoundingClientRect();
+      const cursorViewportX=e.clientX-rect.left;
+      const cursorContentX=host.scrollLeft+cursorViewportX;
+      const m=_chartMeta;
+      const oldSlot=m?m.slot:(_niftyCandleW+Math.max(2,Math.round(_niftyCandleW*0.32)));
+      const idx=Math.round((cursorContentX-34-6)/oldSlot);
+      const dir=e.deltaY<0?3:-3;   // scroll up = zoom in, scroll down = zoom out
+      _niftyCandleW=Math.max(5,Math.min(40,_niftyCandleW+dir));
+      try{ localStorage.setItem('ns_candle_w', _niftyCandleW); }catch(err){}
+      renderChart(_lastNiftyChartData);
+      const newSlot=_niftyCandleW+Math.max(2,Math.round(_niftyCandleW*0.32));
+      const newContentX=34+6+idx*newSlot;
+      host.scrollLeft=Math.max(0,newContentX-cursorViewportX);
+    }, {passive:false});
+  }
+}
+// ---- reusable semi-circle gauge/dial: value -100..100, needle + red-gray-green arc ----
+function gaugeSvg(uid,value,col){
+  const v=Math.max(-100,Math.min(100,value||0));
+  const angle=(v/100*90).toFixed(1);   // -90..90 deg from straight-up (12 o'clock)
+  return `<svg viewBox="0 0 100 60" width="70" height="44" style="overflow:visible">
+    <defs><linearGradient id="gg-${uid}" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" style="stop-color:var(--red)"/>
+      <stop offset="50%" style="stop-color:var(--text3)"/>
+      <stop offset="100%" style="stop-color:var(--green)"/>
+    </linearGradient></defs>
+    <path d="M 8 50 A 42 42 0 0 1 92 50" fill="none" style="stroke:url(#gg-${uid})" stroke-width="7" stroke-linecap="round" opacity="0.55"/>
+    <g style="transform:rotate(${angle}deg);transform-origin:50px 50px;transition:transform .5s ease">
+      <line x1="50" y1="50" x2="50" y2="13" style="stroke:${col}" stroke-width="3" stroke-linecap="round"/>
+    </g>
+    <circle cx="50" cy="50" r="4" style="fill:${col}"/>
+  </svg>`;
+}
+function _escHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function dialBlock(uid,label,l){
+  const v=(l&&typeof l.strength==='number')?l.strength:0;
+  const dir=(l&&l.dir)||'neutral';
+  const col=dir==='bull'?'var(--green)':dir==='bear'?'var(--red)':'var(--text3)';
+  const sub=_escHtml((l&&l.bits&&l.bits[0])||(dir==='neutral'?'flat':dir));
+  return `<div style="text-align:center;width:76px">
+    <div style="font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.3px">${label}</div>
+    ${gaugeSvg(uid,v,col)}
+    <div style="font-size:12px;font-weight:800;color:${col};margin-top:-5px">${v>0?'+':''}${v}</div>
+    <div style="font-size:8px;color:var(--text3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sub}</div>
+  </div>`;
+}
+function renderSignal(s){
+  if(!s)return;
+  const card=document.getElementById('nifty-signal-card');
+  const sig=s.signal;
+  let col,bg;
+  if(sig==='BUY CALL'){col='var(--green)';bg='var(--green3)';}
+  else if(sig==='BUY PUT'){col='var(--red)';bg='var(--red3)';}
+  else if(sig==='TRAP'){col='var(--amber)';bg='var(--amber3)';}
+  else{col='var(--text3)';bg='var(--bg2)';}
+  card.style.borderColor=col;card.style.background=bg;
+  const el=document.getElementById('ns-signal');
+  el.textContent=sig;el.style.color=col;
+  document.getElementById('ns-note').textContent=s.note||'';
+  const str=s.strength||0;
+  document.getElementById('ns-strength-lbl').textContent='strength '+str+(s.trend?' · trend '+s.trend:'');
+  const L=s.layers||{};
+  document.getElementById('ns-dials').innerHTML=
+    dialBlock('price','Price Move',L.price)+
+    dialBlock('oi','OI Score',L.positioning)+
+    dialBlock('fut','Futures',L.futures);
+}
+function renderNifty(v){
+  if(!v){document.getElementById('nv-verdict').textContent='No data';return;}
+  const el=document.getElementById('nifty-verdict');
+  const dir=v.direction;
+  const col=dir==='up'?'var(--green)':dir==='down'?'var(--red)':'var(--amber)';
+  const bg=dir==='up'?'var(--green3)':dir==='down'?'var(--red3)':'var(--amber3)';
+  el.style.borderColor=col;el.style.background=bg;
+  document.getElementById('nv-verdict').textContent=v.verdict;
+  document.getElementById('nv-verdict').style.color=col;
+  document.getElementById('nv-sub').innerHTML=`<b style="color:var(--text2)">${v.agree} of ${v.total} lenses agree</b> · NIFTY ${v.spot} (${v.chg_pct>=0?'+':''}${v.chg_pct}%)`;
+  document.getElementById('nifty-lenses').innerHTML=v.lenses.map(l=>{
+    const c=l.vote==='up'?'var(--green)':l.vote==='down'?'var(--red)':'var(--text3)';
+    const arrow=l.vote==='up'?'▲':l.vote==='down'?'▼':'—';
+    return `<div style="display:flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 16px">
+      <span style="font-size:16px;font-weight:900;color:${c};width:20px;text-align:center">${arrow}</span>
+      <div style="flex:1"><div style="font-size:13px;font-weight:800">${l.name}</div><div style="font-size:11px;color:var(--text3);margin-top:2px">${l.note}</div></div>
+      <span style="font-size:10px;font-weight:800;padding:3px 10px;border-radius:20px;color:${c};background:${l.vote==='up'?'var(--green3)':l.vote==='down'?'var(--red3)':'var(--bg3)'};text-transform:uppercase">${l.vote}</span>
+    </div>`;
+  }).join('');
+}
+</script>
+<script>
+let _f='all',_sharp=[],_session=[],_sessionAll=[];
+function setF(f,btn){_f=f;document.querySelectorAll('.fbtn').forEach(b=>b.classList.remove('active','up','dn'));btn.classList.add('active');if(f==='up')btn.classList.add('up');if(f==='down')btn.classList.add('dn');render();}
+function tvChart(sym){const tv='NSE:'+String(sym).toUpperCase().replace(/[^A-Z0-9&-]/g,'');window.open('https://www.tradingview.com/chart/?symbol='+encodeURIComponent(tv),'_blank','noopener');}
+
+// single vs double click handling
+let _ct=null;
+function rowClick(el,sym){
+  if(_ct){clearTimeout(_ct);_ct=null;} // a dblclick is coming
+  _ct=setTimeout(()=>{el.classList.toggle('open');_ct=null;},220);
+}
+function rowDbl(el,sym,ev){ev.preventDefault();ev.stopPropagation();if(_ct){clearTimeout(_ct);_ct=null;}tvChart(sym);}
+
+function fmt(n){if(n===undefined||n===null||isNaN(+n))return'--';return Number(n).toLocaleString('en-IN');}
+
+function buildFactors(r){
+  const maxAbs=Math.max(...r.factors.map(f=>Math.abs(f.points)),1);
+  const rows=r.factors.map(f=>{
+    const dir=f.dir==='up'?'up':f.dir==='down'?'dn':'0';
+    const ptCls=f.dir==='up'?'fp-up':f.dir==='down'?'fp-dn':'fp-0';
+    const ffCls=f.dir==='up'?'ff-up':f.dir==='down'?'ff-dn':'ff-0';
+    const w=Math.round(Math.abs(f.points)/maxAbs*100);
+    const sign=f.points>0?'+':'';
+    return `<div class="factor">
+      <span class="factor-n">${f.name}</span>
+      <span class="factor-pts ${ptCls}">${sign}${f.points}</span>
+      <span class="factor-bar-wrap"><span class="factor-bar"><span class="factor-fill ${ffCls}" style="width:${w}%"></span></span><span class="factor-note">${f.note}</span></span>
+    </div>`;
+  }).join('');
+  const dirWord=r.direction==='up'?'UP':'DOWN';
+  return `<div class="detail">
+    <div class="detail-hd">Why this ranks — factor contributions</div>
+    ${rows}
+    <div class="detail-foot"><b>${r.aligned_count}/3 lenses aligned ${dirWord}</b> — ${r.align_note}. Spread ${r.spread_pct}% · bid qty ${fmt(r.bid_qty)} · ask qty ${fmt(r.ask_qty)}</div>
+    <div class="dbl-hint">Double-click the row to open ${r.sym} on TradingView</div>
+  </div>`;
+}
+function buildRow(r,rank){
+  const up=r.direction==='up';
+  const action=up?'<span class="action act-buy">BUY CALL</span>':'<span class="action act-sell">BUY PUT</span>';
+  const scoreCls=up?'sg':'sr';
+  const alignTag=r.aligned>=3?'<span class="align-tag">ALL 3 ALIGNED</span>':r.aligned===2?'<span style="font-size:9px;font-weight:800;padding:3px 9px;border-radius:20px;background:var(--bg3);color:var(--text2)">2/3 aligned</span>':'';
+  const reasons=(r.reasons||[]).join(' · ')||'building';
+  // breakdown of where the score came from
+  const bd=`<div class="detail"><div class="detail-hd">Last 3-min window — price leads, book &amp; OI confirm</div>
+    <div class="factor"><span class="factor-n">Price move</span><span class="factor-pts ${r.price_score>0?'fp-up':r.price_score<0?'fp-dn':'fp-0'}">${r.price_score>0?'+':''}${r.price_score}%</span><span class="factor-note">moved in 3min — ${r.price_score>0.05?'up (this is the gate)':r.price_score<-0.05?'down (this is the gate)':'flat → no points'}</span></div>
+    <div class="factor"><span class="factor-n">Order book</span><span class="factor-pts ${r.book_score>0?'fp-up':r.book_score<0?'fp-dn':'fp-0'}">${r.book_score>0?'+':''}${r.book_score}</span><span class="factor-note">bid/ask bias — ${r.book_score>0.2?'buyers heavier':r.book_score<-0.2?'sellers heavier':'balanced'}</span></div>
+    <div class="factor"><span class="factor-n">OI build</span><span class="factor-pts ${r.oi_score>0?'fp-up':r.oi_score<0?'fp-dn':'fp-0'}">${r.oi_score>0?'+':''}${r.oi_score}</span><span class="factor-note">option positioning — ${r.oi_score>0.2?'bullish':r.oi_score<-0.2?'bearish':'neutral'}</span></div>
+    <div class="detail-foot"><b>${r.aligned}/3 forces aligned ${up?'UP':'DOWN'}</b> in the last window · since ${r.since}. Points are earned only when price moves AND flow agrees. <span class="dbl-hint">Double-click for chart</span></div>
+  </div>`;
+  return `<div class="row ${up?'up':'dn'}" onclick="rowClick(this,'${r.sym}')" ondblclick="rowDbl(this,'${r.sym}',event)">
+    <div class="row-main">
+      <div class="rank ${rank===1?'g':''}">${rank}</div>
+      <div class="info">
+        <div class="top"><span class="sym">${r.sym}</span>${(r.day_chg!==undefined&&r.day_chg!==null&&!isNaN(r.day_chg))?`<span style="font-size:13px;font-weight:800;color:${r.day_chg>=0?'var(--green)':'var(--red)'}">${r.day_chg>=0?'+':''}${(+r.day_chg).toFixed(2)}%</span>`:''}${action}${alignTag}</div>
+        <div class="subline">${reasons}</div>
+      </div>
+      <div class="right">
+        <div class="ltp"><div class="ltp-v">${fmt(r.ltp)}</div><div class="ltp-l">LTP</div></div>
+        <div class="score"><div class="score-v ${scoreCls}">${Math.round(r.score)}</div><div class="score-l">score</div></div>
+      </div>
+    </div>
+    <div class="expand"><span class="earr">▾</span> tap for score breakdown · double-tap for chart</div>
+    ${bd}
+  </div>`;
+}
+function render(){
+  let list=_session;
+  if(_f==='up')list=_session.filter(t=>t.direction==='up');
+  else if(_f==='down')list=_session.filter(t=>t.direction==='down');
+  const el=document.getElementById('list');
+  const openSyms=new Set([...document.querySelectorAll('#list .row.open')].map(r=>r.querySelector('.sym')?.textContent));
+  if(!list.length){
+    el.innerHTML='<div class="empty"><div class="empty-big">Building today&#39;s picture</div><div class="empty-sub">Stocks accumulate strength as the day develops. The steady movers rise to the top.</div></div>';
+    return;
+  }
+  el.innerHTML=list.map((r,i)=>buildRow(r,i+1)).join('');
+  document.querySelectorAll('#list .row').forEach(row=>{const s=row.querySelector('.sym')?.textContent;if(openSyms.has(s))row.classList.add('open');});
+}
+
+// ---- SEARCH ----
+let _searchTerm='';
+function onSearch(){
+  const inp=document.getElementById('stock-search');
+  _searchTerm=(inp.value||'').trim().toUpperCase();
+  document.getElementById('search-clear').style.display=_searchTerm?'block':'none';
+  renderSearch();
+}
+function clearSearch(){_searchTerm='';const i=document.getElementById('stock-search');if(i)i.value='';document.getElementById('search-clear').style.display='none';document.getElementById('search-result').innerHTML='';}
+function renderSearch(){
+  const box=document.getElementById('search-result');
+  if(!_searchTerm){box.innerHTML='';return;}
+  const m=(_sessionAll||[]).filter(s=>(s.sym||'').toUpperCase().includes(_searchTerm));
+  if(!m.length){box.innerHTML=`<div style="padding:16px;text-align:center;color:var(--text3);background:var(--bg2);border:1px solid var(--border);border-radius:10px;margin-bottom:12px"><b style="color:var(--text2)">${_searchTerm}</b> — no strength accumulated yet today, or not an F&O stock.</div>`;return;}
+  const openSyms=new Set([...document.querySelectorAll('#search-result .row.open')].map(r=>r.querySelector('.sym')?.textContent));
+  box.innerHTML=m.slice(0,10).map((r,i)=>buildRow(r,i+1)).join('');
+  document.querySelectorAll('#search-result .row').forEach(row=>{const s=row.querySelector('.sym')?.textContent;if(openSyms.has(s))row.classList.add('open');});
+}
+
+function _safe(fn,label){try{fn();}catch(e){console.error('[render '+label+']',e);}}
+async function update(){
+  let d;
+  try{
+    const txt=await(await fetch('/data')).text();
+    d=JSON.parse(txt);
+  }catch(e){
+    // invalid JSON (e.g. NaN in payload) or network error — log the raw cause
+    // and keep the last good screen instead of blanking everything.
+    console.error('[update] /data parse/fetch failed:',e);
+    return;
+  }
+  // each section renders independently — one failure never blanks the others
+  _safe(()=>{document.getElementById('ns').textContent=d.next_scan_in||'--';},'status');
+  _safe(()=>{document.getElementById('d-flow').className='dotmini'+(d.stale?' off':'');
+    document.getElementById('d-oi').className='dotmini'+(d.bridge_alive?'':' off');
+    const err=document.getElementById('err');
+    if(d.error){err.textContent='⚠ '+d.error;err.classList.add('show');}
+    else if(!d.bridge_alive){err.textContent='OI engine not running — price + orderflow still rank fine; OI just adds confirmation. Use start.py for both.';err.classList.add('show');}
+    else err.classList.remove('show');},'header');
+  _safe(()=>{_session=d.session||[];_sessionAll=d.session_all||[];render();if(_searchTerm)renderSearch();},'session');
+  _safe(()=>renderNifty(d.nifty_view),'nifty');
+  _safe(()=>renderSignal(d.nifty_signal),'signal');
+  _safe(()=>renderChart(d.nifty_chart),'chart');
+  _safe(()=>renderHeatmap(d.sector_perf, d.treemap),'heatmap');
+}
+update();setInterval(update,3000);
+setInterval(()=>{const e=document.getElementById('ns');const v=parseInt(e.textContent);if(!isNaN(v)&&v>0)e.textContent=v-1;},1000);
+</script>
+</body>
+</html>

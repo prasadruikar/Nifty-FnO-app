@@ -1,0 +1,13 @@
+# NEVER commit these - they hold your keys and personal data
+config.py
+access_token.json
+conviction_bridge.json
+levels_store.json
+instruments_cache.json
+flow_data/
+scan_data/
+__pycache__/
+*.pyc
+
+# If you push to GitHub, copy config.py to config.example.py first
+# (with placeholder keys) so others know the format.

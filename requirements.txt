@@ -1,0 +1,15 @@
+# Trading Cockpit dependencies
+# Install with:  pip install -r requirements.txt
+
+# StockRanker (nse_scanner.py) - NSE option-chain data
+nse[local]
+
+# Orderflow scanner - Upstox REST depth
+requests
+
+# numpy is used by the StockRanker thumbnail/chart helpers if present
+numpy
+
+# --- OPTIONAL: only needed if you switch to websocket / Upstox Plus ---
+# Uncomment the next line for 30-level websocket depth:
+# upstox-python-sdk
