@@ -50,7 +50,35 @@ STORE = Path("session_store.json")
 
 WINDOW_SECONDS = 180      # 3 minutes - the score can only change this often
 FLAT_PCT       = 0.05     # price move smaller than this (%) = noise, no award
-SCALE          = 5.0      # overall award scale (score has no fixed ceiling)
+SCALE          = 5.0      # (legacy) kept for reference
+
+# ---- per-factor point weights -------------------------------------------
+# The score answers "which stock has the most FORCES ALIGNED right now",
+# not "which stock has travelled the furthest". That distinction is why
+# price used to sit at 95-98%: its old contribution was the RAW move size,
+# which accumulates without limit, while book/OI/futures are bounded per
+# window - so any big mover drowned them out by construction, no matter the
+# weights.
+#
+# FIX: price's per-window contribution is NORMALISED and CAPPED - a move is
+# scored on whether it was a "full-strength" 3-min move (up to PRICE_CAP),
+# not on its raw size. Price still GATES direction (and must clear FLAT_PCT),
+# but it can no longer run away. All four factors now live in the same
+# bounded range, so the score genuinely reflects ALIGNMENT, and breadth
+# (several factors agreeing) beats a lone price spike. Tune the weights to
+# shift the balance; tune REF_MOVE for what counts as a "full" 3-min move.
+REF_MOVE  = 0.30   # a ~0.30% move in 3 min = "full strength" price (=1.0)
+PRICE_CAP = 1.6    # a bigger move can't score more than this (no runaway)
+PRICE_W = 4.0      # x normalised price strength (0..PRICE_CAP)  [lowered]
+BOOK_W  = 5.0      # x order-book agreement (-1..+1)
+OI_W    = 5.0      # x options-OI agreement (-1..+1)
+FUT_W   = 5.5      # x futures agreement (-1.6..+1.6)  [raised - futures is a strong tell]
+
+# BREADTH BONUS: reward windows where MANY factors agree, so a stock with
+# most forces aligned climbs the ranking faster than a lone-price mover and
+# shows up at the TOP. The award is multiplied by (1 + ALIGN_BONUS*(aligned-1)):
+# 1 factor -> 1.0x, 2 -> 1.3x, 3 -> 1.6x, all 4 -> 1.9x. Set to 0 to disable.
+ALIGN_BONUS = 0.30
 
 
 def _sign(x):
@@ -118,6 +146,23 @@ class SessionEngine:
             return 0.0
         return _clamp(fut.get("bias", 0.0), -1.6, 1.6)
 
+    @staticmethod
+    def _fut_detail(fut):
+        """The raw ingredients BEHIND the single futures bias number (its own
+        price move %, OI change, relative volume, buildup/unwind label) - so
+        the breakdown card can say WHY futures voted the way it did, not just
+        show the blended score."""
+        if not fut:
+            return {}
+        return {
+            "label": fut.get("label", ""),
+            "rel_vol": fut.get("rel_vol"),
+            "d_oi": fut.get("d_oi"),
+            "price_pct": fut.get("price_pct"),
+            "day_oi_pct": fut.get("day_oi_pct", 0.0),   # session futures-OI change (watermark)
+            "day_oi_chg": fut.get("day_oi_chg", 0),
+        }
+
     def _new_stock(self, ltp, now_hhmm, now_t):
         return {
             "score": 0.0, "dir": "flat", "since": now_hhmm, "day": self.day,
@@ -125,10 +170,22 @@ class SessionEngine:
             "up_pts": 0.0, "dn_pts": 0.0,
             # current (open) window state
             "win_start": now_t, "win_anchor": ltp,
-            "book_sum": 0.0, "book_n": 0, "oi_bias": 0.0, "fut_bias": 0.0,
+            "book_sum": 0.0, "book_n": 0, "oi_bias": 0.0, "fut_bias": 0.0, "fut_detail": {},
             # last CLOSED window read (for the breakdown card)
             "w_price_pct": 0.0, "w_book_bias": 0.0, "w_oi_bias": 0.0, "w_fut_bias": 0.0,
             "w_dir": "flat", "w_aligned": 0, "w_award": 0.0,
+            # exact points-contribution decomposition of w_award, one per
+            # factor, computed at window-close (see _close_window) - these
+            # SUM to w_award, so the UI can show a true proportional
+            # distribution of "which factor contributed how much"
+            "w_price_pts": 0.0, "w_book_pts": 0.0, "w_oi_pts": 0.0, "w_fut_pts": 0.0,
+            "w_fut_detail": {},
+            # CUMULATIVE per-factor points across EVERY closed window today,
+            # kept per side. cup_* sum to up_pts, cdn_* sum to dn_pts -> the
+            # breakdown card can show how the WHOLE day's score was built
+            # (broad vs one-factor), not just the last 3-min window.
+            "cup_price": 0.0, "cup_book": 0.0, "cup_oi": 0.0, "cup_fut": 0.0,
+            "cdn_price": 0.0, "cdn_book": 0.0, "cdn_oi": 0.0, "cdn_fut": 0.0,
         }
 
     # ---------- the update (called every scan; commits only every 3 min) ----------
@@ -150,6 +207,15 @@ class SessionEngine:
                 # new stock OR an old-format record -> start fresh, never crash
                 b = self._new_stock(ltp, now_hhmm, now_t)
                 self.book[sym] = b
+            # migrate a record saved before per-factor cumulation existed:
+            # attribute its already-earned score to PRICE (the base/gate) so
+            # cumulative totals stay consistent with the score from the start;
+            # real per-factor detail then accrues on every window from here.
+            if "cup_price" not in b:
+                b["cup_price"] = b.get("up_pts", 0.0); b["cup_book"] = 0.0
+                b["cup_oi"] = 0.0; b["cup_fut"] = 0.0
+                b["cdn_price"] = b.get("dn_pts", 0.0); b["cdn_book"] = 0.0
+                b["cdn_oi"] = 0.0; b["cdn_fut"] = 0.0
 
             # --- collect samples for the OPEN window (no scoring yet) ---
             bias = self._book_bias(f)
@@ -158,6 +224,7 @@ class SessionEngine:
                 b["book_n"] += 1
             b["oi_bias"] = self._oi_bias(conv_map.get(sym))    # latest OPTIONS OI read
             b["fut_bias"] = self._fut_bias(fut_map.get(sym))   # latest FUTURES buildup read
+            b["fut_detail"] = self._fut_detail(fut_map.get(sym))
             b["last_price"] = ltp
             b["day_chg"] = float(f.get("day_chg", 0) or 0)    # NSE-style % change
 
@@ -185,26 +252,58 @@ class SessionEngine:
 
         award = 0.0
         aligned = 0
+        price_pts = book_pts = oi_pts = fut_pts = 0.0
         if wdir != "flat":
             s = 1 if wdir == "up" else -1
             book_agree = s * book_bias     # +1 fully confirms .. -1 fully fights
             oi_agree = s * oi_bias
             fut_agree = s * fut_bias
-            # confirmation: 1.0 baseline, book+OI+futures push it up when they
-            # agree, down toward ~0 when they fight the price move. Futures
-            # gets a weight between book (fastest, noisiest) and options OI
-            # (slowest, most deliberate) - it's price+OI+volume combined, a
-            # meaningfully strong confirming signal on its own.
-            conf = 1.0 + book_agree * 1.4 + oi_agree * 0.6 + fut_agree * 0.8
-            conf = _clamp(conf, 0.12, 3.6)
-            award = abs(price_pct) * conf * SCALE
+            # each factor earns its OWN weighted points (see PRICE_W..FUT_W).
+            # price is the NORMALISED, CAPPED move strength (so a monster move
+            # can't dominate); the other three are signed agreements - positive
+            # when they confirm the move, NEGATIVE when they fight it (a genuine
+            # drag). These four SUM to the award, so the breakdown is exact.
+            price_str = min(PRICE_CAP, abs(price_pct) / REF_MOVE)
+            price_pts = price_str * PRICE_W
+            book_pts = book_agree * BOOK_W
+            oi_pts = oi_agree * OI_W
+            fut_pts = fut_agree * FUT_W
+            blend = price_pts + book_pts + oi_pts + fut_pts
+            if blend > 0:
+                award = blend
+            else:
+                # net flow fought the move hard enough to cancel it - this
+                # window earns nothing (the day score only ever grows) and
+                # contributes nothing to the per-factor split
+                award = 0.0
+                price_pts = book_pts = oi_pts = fut_pts = 0.0
+
             aligned = (1 + (1 if book_agree > 0.10 else 0)
                          + (1 if oi_agree > 0.10 else 0)
                          + (1 if fut_agree > 0.10 else 0))
+
+            # BREADTH BONUS: the more forces that agreed this window, the more
+            # the award is worth - so broadly-aligned stocks accumulate faster
+            # and rise to the TOP. Every factor's share is scaled by the same
+            # bonus, so they still SUM to the award (breakdown stays exact).
+            if award > 0 and ALIGN_BONUS:
+                bonus = 1.0 + ALIGN_BONUS * (aligned - 1)
+                award *= bonus
+                price_pts *= bonus; book_pts *= bonus
+                oi_pts *= bonus; fut_pts *= bonus
+
             if wdir == "up":
                 b["up_pts"] += award
+                b["cup_price"] = b.get("cup_price", 0.0) + price_pts
+                b["cup_book"] = b.get("cup_book", 0.0) + book_pts
+                b["cup_oi"] = b.get("cup_oi", 0.0) + oi_pts
+                b["cup_fut"] = b.get("cup_fut", 0.0) + fut_pts
             else:
                 b["dn_pts"] += award
+                b["cdn_price"] = b.get("cdn_price", 0.0) + price_pts
+                b["cdn_book"] = b.get("cdn_book", 0.0) + book_pts
+                b["cdn_oi"] = b.get("cdn_oi", 0.0) + oi_pts
+                b["cdn_fut"] = b.get("cdn_fut", 0.0) + fut_pts
 
         # remember this closed window for the breakdown card
         b["w_price_pct"] = round(price_pct, 2)
@@ -214,6 +313,11 @@ class SessionEngine:
         b["w_dir"] = wdir
         b["w_aligned"] = aligned
         b["w_award"] = round(award, 1)
+        b["w_price_pts"] = round(price_pts, 2)
+        b["w_book_pts"] = round(book_pts, 2)
+        b["w_oi_pts"] = round(oi_pts, 2)
+        b["w_fut_pts"] = round(fut_pts, 2)
+        b["w_fut_detail"] = dict(b.get("fut_detail") or {})
 
         # commit direction + score (whichever side owns the day)
         if b["up_pts"] >= b["dn_pts"]:
@@ -235,6 +339,14 @@ class SessionEngine:
                 continue
             up = b["dir"] == "up"
             pp = b["w_price_pct"]; bb = b["w_book_bias"]; oo = b["w_oi_bias"]; ff = b.get("w_fut_bias", 0.0)
+            # cumulative per-factor contribution for the WINNING side - these
+            # four sum to the stock's total score (how the whole day built up)
+            if up:
+                cum_p = b.get("cup_price", 0.0); cum_b = b.get("cup_book", 0.0)
+                cum_o = b.get("cup_oi", 0.0); cum_f = b.get("cup_fut", 0.0)
+            else:
+                cum_p = b.get("cdn_price", 0.0); cum_b = b.get("cdn_book", 0.0)
+                cum_o = b.get("cdn_oi", 0.0); cum_f = b.get("cdn_fut", 0.0)
             reasons = []
             # price is always the reason it's ranked (it's the gate)
             if (up and pp > 0) or (not up and pp < 0):
@@ -261,6 +373,23 @@ class SessionEngine:
                 "book_score": bb,                          # avg bid/ask bias -1..+1
                 "fut_score": ff,                           # futures price+OI+volume bias -1.6..+1.6
                 "oi_score": oo,                            # OI bias -1..+1
+                # points-contribution decomposition - these 4 SUM to w_award,
+                # a true proportional "which factor contributed how much" split
+                "price_pts": b.get("w_price_pts", 0.0),
+                "book_pts": b.get("w_book_pts", 0.0),
+                "oi_pts": b.get("w_oi_pts", 0.0),
+                "fut_pts": b.get("w_fut_pts", 0.0),
+                "award": b.get("w_award", 0.0),
+                "fut_detail": b.get("w_fut_detail", {}),   # {label, rel_vol, d_oi, price_pct}
+                # LIVE cumulative session futures-OI change (freshest read, for
+                # the row-background watermark) - updates every scan, not every 3min
+                "day_oi_pct": (b.get("fut_detail") or {}).get("day_oi_pct", 0.0),
+                "day_oi_chg": (b.get("fut_detail") or {}).get("day_oi_chg", 0),
+                # CUMULATIVE per-factor points (sum to score) - the day's story
+                "cum_price_pts": round(cum_p, 1),
+                "cum_book_pts": round(cum_b, 1),
+                "cum_oi_pts": round(cum_o, 1),
+                "cum_fut_pts": round(cum_f, 1),
                 "ltp": round(b["last_price"], 1),
                 "since": b["since"],
                 "reasons": reasons or ["building"],

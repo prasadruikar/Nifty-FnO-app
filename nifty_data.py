@@ -218,23 +218,25 @@ class NiftyData:
         return self._fut_key
 
     def fetch_futures_snapshot(self):
-        """Lightweight: just the NIFTY future's price + total OI (for the
-        buildup chart). Verified live end-to-end via futures_probe.py before
-        being wired in here - the quote response for an F&O instrument
-        carries 'oi' directly, no extra endpoint needed."""
+        """The NIFTY future's price + total OI + volume (for the buildup
+        chart's futures score - price/OI drive direction+strength, volume
+        drives confidence). Verified live end-to-end via futures_probe.py
+        before being wired in here - the quote response for an F&O
+        instrument carries 'oi' and 'volume' directly, no extra endpoint
+        needed."""
         fut_key = self._nifty_future_key()
         if not fut_key:
-            return 0, None
+            return 0, None, 0
         try:
             r = self.s.get(QUOTES_URL, params={"instrument_key": fut_key}, timeout=10)
             if r.status_code != 200:
-                return 0, None
+                return 0, None, 0
             data = r.json().get("data", {}) or {}
             for k, q in data.items():
-                return _f(q.get("last_price")), q.get("oi")
+                return _f(q.get("last_price")), q.get("oi"), _f(q.get("volume"))
         except Exception:
             pass
-        return 0, None
+        return 0, None, 0
 
     def fetch(self):
         """Return a dict of all NIFTY context, ready for analyze_nifty()."""
@@ -406,25 +408,29 @@ class NiftyData:
         return out
 
     def fetch_nifty_oi_totals(self):
-        """Total call OI and put OI for NIFTY nearest expiry (for the signal)."""
+        """Total call OI, put OI, call volume, put volume for NIFTY nearest
+        expiry (for the buildup chart's options score - OI drives
+        direction+strength, volume drives confidence)."""
         expiry = self._nifty_option_expiry()
         if not expiry:
-            return 0, 0
+            return 0, 0, 0, 0
         try:
             r = self.s.get(OPTION_CHAIN_URL,
                            params={"instrument_key": NIFTY_KEY, "expiry_date": expiry},
                            timeout=10)
             if r.status_code != 200:
                 print(f"  [nifty] OI totals HTTP {r.status_code} (expiry={expiry}): {r.text[:150]}")
-                return 0, 0
+                return 0, 0, 0, 0
             rows = r.json().get("data", []) or []
-            tc = tp = 0
+            tc = tp = tcv = tpv = 0
             for row in rows:
                 ce = (row.get("call_options", {}) or {}).get("market_data", {}) or {}
                 pe = (row.get("put_options", {}) or {}).get("market_data", {}) or {}
                 tc += int(ce.get("oi", 0) or 0)
                 tp += int(pe.get("oi", 0) or 0)
-            return tc, tp
+                tcv += int(ce.get("volume", 0) or 0)
+                tpv += int(pe.get("volume", 0) or 0)
+            return tc, tp, tcv, tpv
         except Exception as e:
             print(f"  [nifty] OI totals error: {e}")
-            return 0, 0
+            return 0, 0, 0, 0
