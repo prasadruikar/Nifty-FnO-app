@@ -44,6 +44,10 @@ def _sign(x):
     return 1 if x > 0 else -1 if x < 0 else 0
 
 
+def _clamp(x, lo, hi):
+    return lo if x < lo else hi if x > hi else x
+
+
 # --- indicators inlined so this engine NEVER depends on a stale indicators.py
 # (a missing ema_series there was throwing AttributeError and blanking the tab)
 def _ema_series(values, period):
@@ -161,9 +165,10 @@ class NiftySignalEngine:
         self.candles.append({"o": o, "h": h, "l": l, "c": c, "v": v, "ts": ts})
         self.candles = self.candles[-120:]   # keep ~6h of 3-min candles
 
-    def push_oi(self, call_oi, put_oi, ts):
+    def push_oi(self, call_oi, put_oi, ts, call_vol=0, put_vol=0):
         pcr = round(put_oi / call_oi, 3) if call_oi else 1.0
-        self.oi_hist.append({"call_oi": call_oi, "put_oi": put_oi, "pcr": pcr, "ts": ts})
+        self.oi_hist.append({"call_oi": call_oi, "put_oi": put_oi, "pcr": pcr, "ts": ts,
+                              "call_vol": call_vol or 0, "put_vol": put_vol or 0})
         # BUG FIX: this was capped at 120 samples. OI is pushed every ~30s, so
         # 120 samples = only 60 MINUTES of history - but candles keep 120
         # entries = 6 HOURS (full session). Once the app had been running for
@@ -172,19 +177,23 @@ class NiftySignalEngine:
         # shown real data earlier. Match candles' 6h retention: 6h / 30s = 720.
         self.oi_hist = self.oi_hist[-800:]
 
-    def push_futures_oi(self, oi, ts):
-        """Total NIFTY FUTURES open interest (verified live via futures_probe.py -
-        the same quote call that gives us the future's price also returns 'oi')."""
+    def push_futures_oi(self, oi, ts, price=None, vol=0):
+        """Total NIFTY FUTURES open interest + the future's OWN price/volume
+        (verified live via futures_probe.py - the same quote call that gives
+        us the future's price also returns 'oi' and 'volume'). Price/volume
+        here are the FUTURE's own tape, not the spot index - the futures
+        score is built entirely from this instrument's own data."""
         if oi is None:
             return
-        self.fut_oi_hist.append({"oi": oi, "ts": ts})
+        self.fut_oi_hist.append({"oi": oi, "ts": ts, "price": price, "vol": vol or 0})
         self.fut_oi_hist = self.fut_oi_hist[-800:]   # see push_oi() - match candles' 6h window
 
     def _oi_window(self, start_ep, end_ep):
-        """OI change (d_call, d_put) over a candle's [start,end) time window.
-        Returns None if we have no OI samples covering that window (e.g. the
-        backfilled morning candles from before the app started). We only ever
-        invent positioning where we actually measured it."""
+        """OI + volume change over a candle's [start,end) time window:
+        (d_call_oi, d_put_oi, d_call_vol, d_put_vol). Returns None if we
+        have no OI samples covering that window (e.g. the backfilled
+        morning candles from before the app started). We only ever invent
+        positioning where we actually measured it."""
         if start_ep is None or len(self.oi_hist) < 1:
             return None
         before = None; ins = []
@@ -201,12 +210,13 @@ class NiftySignalEngine:
         end_snap = ins[-1]
         start_snap = before or ins[0]
         return (end_snap["call_oi"] - start_snap["call_oi"],
-                end_snap["put_oi"] - start_snap["put_oi"])
+                end_snap["put_oi"] - start_snap["put_oi"],
+                max(0, end_snap.get("call_vol", 0) - start_snap.get("call_vol", 0)),
+                max(0, end_snap.get("put_vol", 0) - start_snap.get("put_vol", 0)))
 
     def _futures_oi_window(self, start_ep, end_ep):
-        """Change in TOTAL futures OI over a candle's window. Same time-align
-        approach as _oi_window, just a single number (futures OI has no
-        call/put split)."""
+        """OI + own-price + own-volume change over a candle's window:
+        (d_oi, d_price, d_vol). Same time-align approach as _oi_window."""
         if start_ep is None or len(self.fut_oi_hist) < 1:
             return None
         before = None; ins = []
@@ -222,124 +232,148 @@ class NiftySignalEngine:
             return None
         end_snap = ins[-1]
         start_snap = before or ins[0]
-        return end_snap["oi"] - start_snap["oi"]
+        d_oi = end_snap["oi"] - start_snap["oi"]
+        sp, ep_ = start_snap.get("price"), end_snap.get("price")
+        d_price = (ep_ - sp) if (sp is not None and ep_ is not None) else None
+        d_vol = max(0, (end_snap.get("vol", 0) or 0) - (start_snap.get("vol", 0) or 0))
+        return (d_oi, d_price, d_vol)
 
     def chart_data(self, n=40, interval_min=3):
         """
         Per-candle data for the two-panel chart: the PRICE candle (top) plus a
-        SCORED positioning-buildup bar (bottom, volume-style), blending TWO
-        independent positioning sources into one bar:
+        SCORED positioning-buildup bar (bottom, volume-style) made of TWO
+        independently-scored halves - a FUTURES score and an OPTIONS score -
+        shown as their own segment inside the same bar. No standalone price
+        line item anywhere; price only ever appears INSIDE these two scores
+        as their momentum/confirmation ingredient.
 
-          1. OPTIONS OI (call vs put) - can DISAGREE with price (that's the
-             real trap signal: price up while options are selling into it).
-             Same price-gated confirmation as the stock ranker: agrees with
-             price -> boosted; fights price -> shrunk AND flagged amber.
-
-          2. FUTURES OI (total, no call/put split) - read with the standard
-             buildup/unwind table. Because futures OI is a single number, it
-             can NEVER independently disagree with price the way options can:
+        FUTURES SCORE - fires only once price (the futures' own momentum
+        proxy) AND futures OI are both actually moving; three ingredients,
+        all signed by momentum's direction and summed:
+          1. MOMENTUM - how far price moved this candle.
+          2. OI       - fresh BUILDUP (strong) vs COVERING/UNWINDING (weak):
                  price up   + OI up    -> Long Buildup   (bullish, STRONG)
                  price up   + OI down  -> Short Covering (bullish, weak)
                  price down + OI up    -> Short Buildup  (bearish, STRONG)
                  price down + OI down  -> Long Unwinding (bearish, weak)
-             So its contribution always points the same way price already
-             moved - it only tells us whether that move is fresh conviction
-             (buildup) or just people closing out (covering/unwinding).
+          3. VOLUME   - this candle's FUTURES volume vs its own recent
+             average (real futures tape volume, not the index's).
 
-        The two are added together into ONE bar. If both agree, the bar gets
-        real double-confirmation height. Options can still trigger the amber
-        divergence flag on its own; futures OI alone never does (see above).
+        OPTIONS SCORE - fires only once options OI is actually moving; the
+        sign comes from OI ITSELF (put-writing minus call-writing) - not
+        from price - because options positioning genuinely CAN disagree
+        with price, and that disagreement is the real trap signal. Price
+        and options volume only confirm/shrink the OI reading's size:
+          1. OI       - net put-writing vs call-writing (sets the sign).
+          2. MOMENTUM - price agreeing with OI boosts the score, price
+             fighting OI shrinks it (confirmation, not sign-setter).
+          3. VOLUME   - options volume vs its own recent average, another
+             confirmation multiplier.
 
         Each item:
           {o,h,l,c,v,ts,
-           pos_flow,     # SIGNED combined scored buildup. null = no data yet at all
-           pos_raw,      # raw signed OPTIONS OI flow (put-writing minus call-writing)
-           pos_type,     # 'PW'/'CW'/'PU'/'CU' dominant OPTIONS OI action this candle
-           fut_raw,      # raw futures OI change this candle (0 if no futures data)
-           fut_type,     # 'LB'/'SC'/'SB'/'LU' futures buildup/unwind label, or ''
-           build_dir,    # 'bull'/'bear'/'' - the combined bar's direction
-           divergence}   # price disagrees with OPTIONS positioning (the real trap)
+           pos_flow,     # SIGNED total = fut_score + opt_score. null = no data yet
+           fut_score,    # futures half (momentum+OI+volume, all agreeing)
+           opt_score,    # options half (OI-led, momentum+volume confirm it)
+           fut_raw, fut_type,   # raw futures OI change + LB/SC/SB/LU label
+           pos_raw, pos_type,   # raw options OI flow + PW/CW/PU/CU label
+           build_dir,    # 'bull'/'bear'/'' - the bar's NET direction
+           divergence}   # futures and options disagree, or options fights price
         """
         if not self.candles:
             return []
         cands = self.candles[-n:]
         win = interval_min * 60
-        out = []
+        MOM_SCALE = 35.0
+        FUT_VOL_SCALE = 6.0
+        OPT_MOM_AGREE, OPT_MOM_FIGHT = 1.2, 0.7
+        OPT_VOL_LO, OPT_VOL_HI = 0.7, 1.5
+
+        # ---- first pass: pull each candle's raw OI/price/volume windows,
+        # so relative volume can be judged against THIS engine's own recent
+        # average (never a fixed threshold) ----
+        raw = []
         for c in cands:
             start_ep = _to_epoch(c.get("ts"))
             end_ep = (start_ep + win) if start_ep is not None else None
             dw = self._oi_window(start_ep, end_ep) if end_ep is not None else None
-            d_fut_oi = self._futures_oi_window(start_ep, end_ep) if end_ep is not None else None
+            df = self._futures_oi_window(start_ep, end_ep) if end_ep is not None else None
+            raw.append((c, dw, df))
 
+        fut_vols = [df[2] for (_, _, df) in raw if df is not None]
+        opt_vols = [dw[2] + dw[3] for (_, dw, _) in raw if dw is not None]
+        fut_vol_avg = (sum(fut_vols) / len(fut_vols)) if fut_vols else 0
+        opt_vol_avg = (sum(opt_vols) / len(opt_vols)) if opt_vols else 0
+
+        out = []
+        for c, dw, df in raw:
             price_pct = (c["c"] - c["o"]) / c["o"] * 100 if c["o"] else 0.0
             price_dir = _sign(price_pct)
 
-            if dw is None and d_fut_oi is None:
-                # no positioning measured for this candle at all (pre-launch backfill)
+            if dw is None and df is None:
+                # nothing measured for this candle at all (pre-launch backfill)
                 out.append({
                     "o": round(c["o"], 1), "h": round(c["h"], 1),
                     "l": round(c["l"], 1), "c": round(c["c"], 1),
                     "v": int(c.get("v", 0)), "ts": c["ts"],
-                    "pos_flow": None, "pos_raw": 0, "pos_type": "",
-                    "fut_raw": 0, "fut_type": "",
+                    "pos_flow": None, "fut_score": 0, "opt_score": 0,
+                    "fut_raw": 0, "fut_type": "", "pos_raw": 0, "pos_type": "",
                     "build_dir": "", "divergence": False,
                 })
                 continue
 
-            # ---- 1. OPTIONS component (can disagree with price -> real trap) ----
-            opt_score = 0.0; oi_flow = 0; pos_type = ""; divergence = False
-            if dw is not None:
-                d_call, d_put = dw
-                oi_flow = d_put - d_call            # + = bullish build, - = bearish build
-                mag = _sign(oi_flow) * math.log1p(abs(oi_flow))
-                pos_dir = _sign(oi_flow)
-                if pos_dir != 0 and price_dir != 0:
-                    conf = 1.4 if pos_dir == price_dir else 0.5   # agree boosts, fight shrinks
-                else:
-                    conf = 1.0
-                opt_score = mag * conf
-                divergence = (pos_dir != 0 and price_dir != 0 and pos_dir != price_dir)
-                acts = {"PW": max(0, d_put), "CU": max(0, -d_call),
-                        "CW": max(0, d_call), "PU": max(0, -d_put)}
-                pos_type = max(acts, key=acts.get) if any(acts.values()) else ""
-
-            # ---- 2. FUTURES component (buildup/unwind - always follows price) ----
-            # IMPORTANT: "buildup" (strong/fresh conviction) means OI is
-            # INCREASING - fresh positions opening - regardless of which way
-            # price moved. OI DECREASING always means someone is CLOSING OUT
-            # (covering a short during a rally, or unwinding a long during a
-            # fall) - that's the "weak" case, whichever way price went. This
-            # is NOT the same as "OI direction agrees with price direction" -
-            # that would be a different (wrong) reading. Standard table:
-            #   price up   + OI up   -> Long Buildup   (bullish, STRONG)
-            #   price up   + OI down -> Short Covering (bullish, weak)
-            #   price down + OI up   -> Short Buildup  (bearish, STRONG)
-            #   price down + OI down -> Long Unwinding (bearish, weak)
-            fut_score = 0.0; fut_type = ""
-            if d_fut_oi is not None and price_dir != 0:
+            # ---- FUTURES SCORE: momentum + OI + volume, all agreeing ----
+            fut_score = 0.0; fut_type = ""; d_fut_oi = None
+            if df is not None:
+                d_fut_oi, _d_fut_price, d_fut_vol = df
                 fut_oi_dir = _sign(d_fut_oi)
-                if fut_oi_dir != 0:
-                    is_fresh = (fut_oi_dir > 0)          # OI increasing = buildup = strong
-                    weight = 1.4 if is_fresh else 0.6     # buildup=strong, unwind/cover=weak
+                if price_dir != 0 and fut_oi_dir != 0:
+                    is_fresh = fut_oi_dir > 0            # OI increasing = buildup = fresh conviction
+                    base_weight = 1.4 if is_fresh else 0.6   # buildup=strong, unwind/cover=weak
                     fut_mag = math.log1p(abs(d_fut_oi))
-                    fut_score = price_dir * fut_mag * weight  # always signed WITH price
-                    if price_dir > 0:
-                        fut_type = "LB" if is_fresh else "SC"   # Long Buildup / Short Covering
-                    else:
-                        fut_type = "SB" if is_fresh else "LU"   # Short Buildup / Long Unwinding
+                    rel_vol = _clamp((d_fut_vol / fut_vol_avg) if fut_vol_avg > 0 else 1.0, 0.4, 2.5)
+                    mom_part = abs(price_pct) * MOM_SCALE
+                    oi_part = fut_mag * base_weight
+                    vol_part = (rel_vol - 1.0) * FUT_VOL_SCALE
+                    fut_score = price_dir * (mom_part + oi_part + vol_part)
+                    fut_type = ("LB" if price_dir > 0 else "SB") if is_fresh else \
+                               ("SC" if price_dir > 0 else "LU")
 
-            # ---- combine into ONE bar ----
-            score = opt_score + fut_score
+            # ---- OPTIONS SCORE: OI's own direction, confirmed by momentum+volume ----
+            opt_score = 0.0; oi_flow = 0; pos_type = ""; opt_fights_price = False
+            if dw is not None:
+                d_call, d_put, d_call_vol, d_put_vol = dw
+                oi_flow = d_put - d_call            # + = put-writing/call-unwinding = bullish
+                oi_dir = _sign(oi_flow)
+                if oi_dir != 0:
+                    opt_mag = math.log1p(abs(oi_flow))
+                    mom_conf = 1.0 if price_dir == 0 else (OPT_MOM_AGREE if price_dir == oi_dir else OPT_MOM_FIGHT)
+                    d_opt_vol = d_call_vol + d_put_vol
+                    vol_conf = _clamp((d_opt_vol / opt_vol_avg) if opt_vol_avg > 0 else 1.0, OPT_VOL_LO, OPT_VOL_HI)
+                    opt_score = oi_dir * opt_mag * mom_conf * vol_conf
+                    opt_fights_price = (price_dir != 0 and price_dir != oi_dir)
+                    acts = {"PW": max(0, d_put), "CU": max(0, -d_call),
+                            "CW": max(0, d_call), "PU": max(0, -d_put)}
+                    pos_type = max(acts, key=acts.get) if any(acts.values()) else ""
+
+            score = fut_score + opt_score
             combined_dir = _sign(score)
+            # divergence: options fighting price (the classic trap), OR the
+            # futures and options halves outright disagree with each other
+            divergence = opt_fights_price or (
+                fut_score != 0 and opt_score != 0 and _sign(fut_score) != _sign(opt_score))
 
             out.append({
                 "o": round(c["o"], 1), "h": round(c["h"], 1),
                 "l": round(c["l"], 1), "c": round(c["c"], 1),
                 "v": int(c.get("v", 0)), "ts": c["ts"],
-                "pos_flow": round(score, 3), "pos_raw": round(oi_flow),
-                "pos_type": pos_type,
+                "pos_flow": round(score, 3),
+                "fut_score": round(fut_score, 3),
+                "opt_score": round(opt_score, 3),
                 "fut_raw": round(d_fut_oi) if d_fut_oi is not None else 0,
                 "fut_type": fut_type,
+                "pos_raw": round(oi_flow),
+                "pos_type": pos_type,
                 "build_dir": "bull" if combined_dir > 0 else "bear" if combined_dir < 0 else "",
                 "divergence": divergence,
             })

@@ -50,16 +50,23 @@ import nifty_bias as nifty_mod
 import nifty_data as nifty_data_mod
 import nifty_signal as nifty_sig_mod
 import nifty_logger as nifty_log_mod
+import stock_futures as stock_fut_mod
+import swing_engine as swing_mod
+import market_hours as mh
 
-MARKET_START = (9, 15)
-MARKET_END   = (15, 30)
+MARKET_START = mh.MARKET_START
+MARKET_END   = mh.MARKET_END
+
+SWING_REFRESH_SEC = 3600   # swing setups use DAILY data - refresh hourly
 
 _state = {
     "session": [], "session_all": [], "sector_perf": [], "treemap": [], "sharp": [], "nifty_view": None, "nifty_signal": None, "nifty_chart": [], "trades": [], "building": [], "running": [], "ranked": [], "at_level": [], "setups": [],
+    "swing": [], "swing_oi": [], "swing_updated": "", "swing_ver": "", "universe": [],
     "conviction_updated": "", "nifty_bias": "", "bridge_alive": False,
     "scan_num": 0, "scan_time": "--:--:--",
     "next_scan_in": 0, "total": 0, "source": config.DATA_SOURCE,
     "stale": False, "error": "",
+    "market_closed": False, "frozen_at": "", "market_reason": "",   # off-hours: state preserved, live fetch paused
 }
 _lock = threading.Lock()
 _prev_snapshot = {}          # last scan's depth, for scan-to-scan signals
@@ -78,8 +85,53 @@ _nifty_sig = nifty_sig_mod.NiftySignalEngine()  # candle-by-candle NIFTY signal
 _nifty_candle_last = [0.0]    # last candle refresh time
 _nifty_logger = nifty_log_mod.NiftyLogger()   # logs every closed candle for backtesting
 _nifty_oi_totals = [None, None, None]         # cache: [call_oi, put_oi, fut_oi] between 30s refreshes
+_stock_fut = None             # StockFutures fetcher (set up in main when token present)
+_stock_fut_cache = [{}]       # last fetched {SYMBOL: fut_score_dict} (throttled)
+_stock_fut_last = [0.0]       # timestamp of last stock-futures fetch
+_swing = None                 # SwingEngine (daily multi-day setups), set in main
 _last_flow = {}              # {sym: latest flow signal} - for search lookup
 _UI_FILE = Path(__file__).parent / "orderflow_ui.html"
+
+# Snapshot of the display state, written every scan so a restart (or just
+# opening the app after the close) shows the LAST live picture frozen, instead
+# of an empty "building today's picture" screen. Only the live sections need
+# this - swing re-pulls its own historical data, NIFTY engine persists separately.
+STATE_FILE = Path(__file__).parent / "cockpit_state.json"
+_PERSIST_KEYS = [
+    "session", "session_all", "sector_perf", "treemap", "sharp",
+    "nifty_view", "nifty_signal", "nifty_chart", "trades", "building",
+    "running", "ranked", "at_level", "setups",
+    "conviction_updated", "nifty_bias", "scan_time", "total",
+    "swing", "swing_oi", "swing_updated", "swing_ver",
+]
+
+
+def save_state():
+    """Dump the display payload to disk (best-effort, never breaks a scan)."""
+    try:
+        with _lock:
+            snap = {k: _state.get(k) for k in _PERSIST_KEYS}
+        snap["saved_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        STATE_FILE.write_text(_safe_json(snap))
+    except Exception:
+        pass
+
+
+def load_state():
+    """Pre-fill _state from the last saved snapshot so the UI shows the last
+    live picture immediately on startup. Returns True if anything was loaded."""
+    try:
+        if not STATE_FILE.exists():
+            return False
+        data = json.loads(STATE_FILE.read_text())
+        with _lock:
+            for k in _PERSIST_KEYS:
+                if data.get(k) is not None:
+                    _state[k] = data[k]
+            _state["saved_at"] = data.get("saved_at", "")
+        return True
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------
@@ -107,8 +159,8 @@ def save_csv(rows, ts):
 
 
 def mkt_open():
-    t = datetime.datetime.now()
-    return MARKET_START <= (t.hour, t.minute) < MARKET_END
+    # weekend + NSE holiday + session-hours, all handled in market_hours.py
+    return mh.mkt_open()
 
 
 # ---------------------------------------------------------------------
@@ -119,6 +171,36 @@ def scanner_main(feed):
     while True:
         try:
             t0 = datetime.datetime.now()
+
+            # --- MARKET CLOSED: freeze everything, stop fetching live data ---
+            # Outside 9:15-15:30 the depth/OI feeds are meaningless (and would
+            # return empty snapshots that flip the UI to "stale"). So we DON'T
+            # touch the feed or the engines - every bit of the last live scan
+            # stays exactly as it was. The web server keeps serving it, the UI
+            # just shows a "market closed" banner. We re-check once a minute so
+            # it wakes up on its own at 9:15 without a restart.
+            if not mkt_open():
+                with _lock:
+                    if not _state["market_closed"]:
+                        # first tick after the bell: stamp when we froze
+                        _state["frozen_at"] = _state.get("scan_time") or t0.strftime("%H:%M:%S")
+                    _state["market_closed"] = True
+                    _state["market_reason"] = mh.reason_text(t0)   # WHY it's closed (holiday name / weekend / hours)
+                    _state["stale"] = False          # not stale - deliberately frozen
+                    _state["error"] = ""
+                    _state["next_scan_in"] = 0
+                if int(t0.timestamp()) % 300 < 2:    # occasional heartbeat line
+                    _reason = mh.market_status(t0)[1]
+                    print(f"  [{t0:%H:%M:%S}] market closed ({_reason}) - state frozen, live fetch paused")
+                time.sleep(30)
+                continue
+            else:
+                with _lock:
+                    if _state["market_closed"]:
+                        print(f"  [{t0:%H:%M:%S}] market OPEN - resuming live scans")
+                    _state["market_closed"] = False
+                    _state["frozen_at"] = ""
+
             scan_n = _state["scan_num"] + 1
             print(f"  [{t0:%H:%M:%S}] Scan #{scan_n} ...", end=" ", flush=True)
 
@@ -240,7 +322,19 @@ def scanner_main(feed):
                     "bid_qty": sum(q for _, q, _ in bids),
                     "ask_qty": sum(q for _, q, _ in asks),
                 }
-            session_ranked = _session.update(sess_flows, conv_map)
+            # === per-stock FUTURES score (price + OI + volume), throttled ~45s -
+            # OI/volume don't need 4s freshness, and it's one bulk call across
+            # the whole universe (see stock_futures.py), same pattern as the
+            # NIFTY futures/OI refresh below. ===
+            try:
+                now_ts3 = time.time()
+                if _stock_fut and (now_ts3 - _stock_fut_last[0] >= 45 or not _stock_fut_cache[0]):
+                    _stock_fut_cache[0] = _stock_fut.refresh()
+                    _stock_fut_last[0] = now_ts3
+            except Exception as _e:
+                print(f"  [stock-fut] refresh error: {_e}")
+
+            session_ranked = _session.update(sess_flows, conv_map, _stock_fut_cache[0])
             _session.save()
 
             # === SECTOR HEATMAP + F&O TREEMAP (throttled ~30s) ==============
@@ -302,13 +396,13 @@ def scanner_main(feed):
                     if candles:
                         # rebuild the engine's candle history from fresh data
                         _nifty_sig.candles = candles[-60:]
-                    call_oi, put_oi = _nifty_data.fetch_nifty_oi_totals()
+                    call_oi, put_oi, call_vol, put_vol = _nifty_data.fetch_nifty_oi_totals()
                     if call_oi or put_oi:
-                        _nifty_sig.push_oi(call_oi, put_oi, str(now_ts2))
+                        _nifty_sig.push_oi(call_oi, put_oi, str(now_ts2), call_vol=call_vol, put_vol=put_vol)
                         _nifty_oi_totals[0], _nifty_oi_totals[1] = call_oi, put_oi
-                    _fp, _foi = _nifty_data.fetch_futures_snapshot()
+                    _fp, _foi, _fvol = _nifty_data.fetch_futures_snapshot()
                     if _foi is not None:
-                        _nifty_sig.push_futures_oi(_foi, str(now_ts2))
+                        _nifty_sig.push_futures_oi(_foi, str(now_ts2), price=_fp, vol=_fvol)
                         _nifty_oi_totals[2] = _foi
                     _nifty_candle_last[0] = now_ts2
             except Exception:
@@ -357,7 +451,13 @@ def scanner_main(feed):
             n_sharp = len(sharp_ranked)
             n_aligned = sum(1 for r in sharp_ranked if r.get("aligned"))
             at_level = [r for r in ranked if r.get("at_level")]
-            print(f"{len(snap)} books | {n_sharp} sharp | {n_aligned} aligned | {elapsed:.1f}s")
+            n_conv = len(conv_map)   # OI engine (StockRanker/nse_scanner.py via conviction_bridge.json)
+            if _stock_fut:
+                n_fut_scored = sum(1 for v in _stock_fut_cache[0].values() if v.get("dir") and v.get("dir") != "neutral")
+                fut_bit = f" | {n_fut_scored}/{_stock_fut.last_total or len(_stock_fut.fut_keys)} futures"
+            else:
+                fut_bit = " | futures OFF"
+            print(f"{len(snap)} books | {n_sharp} sharp | {n_aligned} aligned | {n_conv} OI{fut_bit} | {elapsed:.1f}s")
 
             with _lock:
                 _state.update({
@@ -386,6 +486,10 @@ def scanner_main(feed):
                     "error": "",
                 })
 
+            # persist the live picture so a restart / after-hours open shows it
+            # frozen instead of an empty screen
+            save_state()
+
             for s in range(int(wait), 0, -1):
                 with _lock:
                     _state["next_scan_in"] = s
@@ -396,6 +500,73 @@ def scanner_main(feed):
         except Exception as e:
             print(f"\n  Scan error: {e} | retry in 5s")
             time.sleep(5)
+
+
+# ---------------------------------------------------------------------
+# Swing setup loop (DAILY data, hourly) - runs on its own thread so the
+# ~210 daily-candle calls never stall the fast order-flow scan loop.
+# ---------------------------------------------------------------------
+def swing_loop():
+    if _swing is None:
+        return
+    time.sleep(8)   # let the main feed settle first
+    # publish the engine version straight away so the UI shows it even before the
+    # first live compute (and when frozen off-hours)
+    with _lock:
+        _state["swing_ver"] = getattr(_swing, "version", "")
+    did_cold_populate = False
+    while True:
+        try:
+            if mkt_open():
+                # LIVE market only: re-pull daily candles every hour (force=True)
+                # so TODAY's forming OI actually updates each hour - without force,
+                # refresh() skips the same-day re-fetch and OI would sit frozen at
+                # the morning's value all session. This loop runs hourly (see the
+                # SWING_REFRESH_SEC sleep below), so it's one fetch/stock/hour.
+                setups = _swing.refresh(force=True)
+                oirise = _swing.oi_rising(5)   # pure 5-day OI-growth ranking (price ignored)
+                with _lock:
+                    _state["swing"] = setups[:60]
+                    _state["swing_oi"] = oirise[:60]
+                    _state["swing_updated"] = _swing.last_updated
+                    _state["swing_ver"] = getattr(_swing, "version", "")
+                print(f"  [swing] {getattr(_swing,'version','?')} · {len(setups)} setups · "
+                      f"{len(oirise)} OI-rising @ {_swing.last_updated}  [live]")
+            else:
+                # MARKET CLOSED (after-hours / weekend / holiday): DO NOT fetch or
+                # recompute. Keep the last live session's ranking EXACTLY as it is
+                # (restored from disk on a restart). This is why the list stays
+                # identical to yesterday on a holiday instead of changing.
+                # For a fresh end-of-day analysis on finalised data, run the
+                # standalone  oi_rank.py  by hand.
+                #
+                # ONE exception: if there's genuinely nothing to show (cold start
+                # with no saved snapshot), populate ONCE from the CACHED daily data
+                # - no API call, no fetch - so the screen isn't blank. Uses the same
+                # cached candles, so it reproduces the last session's ranking.
+                with _lock:
+                    is_empty = not _state.get("swing_oi") and not _state.get("swing")
+                if is_empty and not did_cold_populate and _swing.daily:
+                    try:
+                        oirise = _swing.oi_rising(5)
+                        setups = [a for a in (_swing.analyze(s, _swing.daily.get(s))
+                                              for s in _swing.fut_keys) if a]
+                        setups.sort(key=lambda x: x["score"], reverse=True)
+                        with _lock:
+                            _state["swing"] = setups[:60]
+                            _state["swing_oi"] = oirise[:60]
+                            _state["swing_updated"] = (_swing.last_updated or
+                                                       datetime.datetime.now().strftime("%H:%M"))
+                            _state["swing_ver"] = getattr(_swing, "version", "")
+                        print(f"  [swing] cold-populate from cache (frozen): "
+                              f"{len(oirise)} OI-rising, {len(setups)} setups")
+                    except Exception as e:
+                        print(f"  [swing] cold-populate error: {e}")
+                    did_cold_populate = True
+        except Exception as e:
+            print(f"  [swing] refresh error: {e}")
+        # while shut, just re-check the clock occasionally (no work done)
+        time.sleep(SWING_REFRESH_SEC if mkt_open() else 300)
 
 
 # ---------------------------------------------------------------------
@@ -441,6 +612,40 @@ class Handler(BaseHTTPRequestHandler):
                 "flow": flow, "levels": lvls,
                 "scan_time": _state.get("scan_time", ""),
             }))
+        elif self.path.startswith("/swinghist"):
+            # /swinghist?sym=RELIANCE -> that stock's HOURLY futures OI/price/vol
+            # (fetched on demand so the swing card can draw per-hour buildup dots)
+            from urllib.parse import parse_qs, urlparse
+            sym = parse_qs(urlparse(self.path).query).get("sym", [""])[0].upper().strip()
+            hourly = []
+            try:
+                if _swing is not None and sym:
+                    hourly = _swing.fetch_hourly(sym)
+            except Exception as e:
+                print(f"  [swing] hourly fetch error for {sym}: {e}")
+            self._json(json.dumps({"sym": sym, "hourly": hourly}))
+        elif self.path.startswith("/swingopt"):
+            # /swingopt?sym=RELIANCE -> live option-chain snapshot (OI walls/PCR)
+            from urllib.parse import parse_qs, urlparse
+            sym = parse_qs(urlparse(self.path).query).get("sym", [""])[0].upper().strip()
+            opt = {}
+            try:
+                if _swing is not None and sym:
+                    opt = _swing.fetch_options(sym)
+            except Exception as e:
+                print(f"  [swing] options fetch error for {sym}: {e}")
+            self._json(json.dumps({"sym": sym, "options": opt}))
+        elif self.path.startswith("/swinglookup"):
+            # /swinglookup?sym=RELIANCE -> swing card for ANY searched stock
+            from urllib.parse import parse_qs, urlparse
+            sym = parse_qs(urlparse(self.path).query).get("sym", [""])[0].upper().strip()
+            card = {}
+            try:
+                if _swing is not None and sym:
+                    card = _swing.lookup(sym)
+            except Exception as e:
+                print(f"  [swing] lookup error for {sym}: {e}")
+            self._json(json.dumps({"sym": sym, "card": card}))
         elif self.path.startswith("/levels"):
             # /levels?sym=RELIANCE  -> all proven levels for that stock
             sym = ""
@@ -504,6 +709,22 @@ def main():
         sys.exit("\n  No instruments resolved. Check config.UNIVERSE.\n")
     with _lock:
         _state["total"] = len(inst_map)
+        _state["universe"] = sorted(inst_map.keys())   # for the swing search autocomplete
+
+    # restore the last saved live picture so the UI isn't empty on startup -
+    # if the market is shut, present it as a frozen snapshot right away
+    if load_state():
+        with _lock:
+            _state["universe"] = sorted(inst_map.keys())  # keep fresh universe
+        if not mkt_open():
+            with _lock:
+                _state["market_closed"] = True
+                _state["frozen_at"] = _state.get("scan_time") or "--:--:--"
+            print(f"  Restored last live snapshot from {STATE_FILE.name} "
+                  f"(saved {_state.get('saved_at','?')}) - market closed, showing it frozen.")
+        else:
+            print(f"  Restored last live snapshot (saved {_state.get('saved_at','?')}) "
+                  f"- will refresh on the next live scan.")
 
     # 4. build the feed - production websocket (30-level) or REST fallback
     print(f"\n  Data source : {config.DATA_SOURCE.upper()}")
@@ -522,6 +743,25 @@ def main():
         print(f"  NIFTY data  : DISABLED - NiftyData() failed to init: {e}")
         print("                (NIFTY Direction tab will stay empty until this is fixed)")
         _nifty_data = None
+    # per-stock FUTURES score (price + OI + volume) - same lens as NIFTY's
+    # futures layer, applied to the whole F&O stock universe
+    global _stock_fut
+    try:
+        _stock_fut = stock_fut_mod.StockFutures(token, inst_map.keys())
+        print(f"  Stock futures: Upstox ({len(_stock_fut.fut_keys)} of {len(inst_map)} stocks mapped)")
+    except Exception as e:
+        print(f"  Stock futures: DISABLED - StockFutures() failed to init: {e}")
+        _stock_fut = None
+    # SWING engine - reuses the futures keys stock_futures already resolved,
+    # then pulls DAILY futures candles (price+vol+OI) for the multi-day story
+    global _swing
+    try:
+        fkeys = dict(_stock_fut.fut_keys) if _stock_fut and _stock_fut.fut_keys else {}
+        _swing = swing_mod.SwingEngine(token, fkeys, under_keys=inst_map)
+        print(f"  Swing setups: Upstox daily ({len(fkeys)} stocks, refresh hourly)")
+    except Exception as e:
+        print(f"  Swing setups: DISABLED - SwingEngine() failed to init: {e}")
+        _swing = None
     global _sectors
     try:
         _sectors = sectors_mod.Sectors(token)
@@ -546,6 +786,8 @@ def main():
     Path(config.DATA_DIR).mkdir(exist_ok=True)
     t = threading.Thread(target=scanner_main, args=(feed,), daemon=True)
     t.start()
+    if _swing is not None:
+        threading.Thread(target=swing_loop, daemon=True).start()
     server = HTTPServer(("localhost", config.PORT), Handler)
     st = threading.Thread(target=server.serve_forever, daemon=True)
     st.start()

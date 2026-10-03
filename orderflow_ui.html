@@ -57,7 +57,7 @@ body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;font-
 .act-buy{background:var(--green);color:#00140B}.act-sell{background:var(--red);color:#180008}
 .align-tag{font-size:9px;font-weight:800;padding:3px 9px;border-radius:20px;background:var(--amber3);color:var(--amber);border:1px solid #4A3410}
 .subline{font-size:11px;color:var(--text2);margin-top:4px}
-.right{display:flex;align-items:center;gap:16px;flex-shrink:0}
+.right{display:flex;align-items:center;gap:11px;flex-shrink:0}
 .ltp{text-align:right}
 .ltp-v{font-size:13px;font-weight:700;color:var(--text2)}
 .ltp-l{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.3px}
@@ -81,6 +81,31 @@ body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;font-
 .ff-up{background:var(--green)}.ff-dn{background:var(--red)}.ff-0{background:var(--text3)}
 .factor-note{font-size:10px;color:var(--text3)}
 .detail-foot{font-size:10px;color:var(--text3);margin-top:10px;padding-top:10px;border-top:1px solid var(--border);line-height:1.5}
+/* right-side contribution bars (grow with the score) */
+.cbars{display:flex;align-items:flex-end;gap:2px;height:32px;width:38px;padding:3px;background:var(--bg2);border:1px solid var(--border);border-radius:7px;box-sizing:border-box}
+.cbar{flex:1;min-height:1px;border-radius:2px 2px 0 0;transition:height .55s cubic-bezier(.2,.7,.2,1)}
+.clegend{display:inline-flex;align-items:center;gap:4px;margin-left:10px;font-size:10px;color:var(--text3)}
+.clegend b{width:8px;height:8px;border-radius:2px;display:inline-block}
+/* swing card: OI / futures / volume history toggle + inline line chart */
+.sgtoggle{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center}
+.sgfut-ctl{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
+.sgbtn{font-size:10px;font-weight:700;padding:5px 10px;border-radius:7px;cursor:pointer;color:var(--text3);background:var(--bg3);border:1px solid var(--border)}
+.sgbtn.sg-active{color:var(--blue);background:var(--blue3);border-color:var(--blue)}
+.sgsel{font-size:11px;font-weight:800;padding:5px 10px;border-radius:7px;cursor:pointer;color:var(--text1);background:var(--bg3);border:1px solid var(--border)}
+.sgsub{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px}
+.swing-graph{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;min-height:60px}
+/* detail split: live rows (left) + distribution chart (right), same row */
+.detail-split{display:flex;gap:22px;flex-wrap:wrap;align-items:stretch}
+.dcol{flex:1 1 360px;min-width:0;display:flex;flex-direction:column}
+.dcol-dist{flex:0 1 320px}
+/* distribution chart — one bar per factor, each with a LONG/SHORT vote */
+.cbig{display:flex;justify-content:space-around;gap:10px;padding:12px 10px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;flex:1}
+.cbcol{display:flex;flex-direction:column;align-items:center;width:60px}
+.cbarea{flex:1;min-height:92px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;width:100%}
+.cbbar{width:34px;border-radius:5px 5px 0 0;transition:height .55s cubic-bezier(.2,.7,.2,1)}
+.cbval{font-size:12px;font-weight:800;margin-bottom:4px}
+.cblbl{font-size:10px;color:var(--text2);margin-top:7px;font-weight:700;text-align:center;line-height:1.5}
+.cbsig{display:inline-block;margin-top:3px;font-size:9px;font-weight:800;padding:2px 8px;border-radius:10px;letter-spacing:.4px}
 .detail-foot b{color:var(--text2)}
 .dbl-hint{font-size:9px;color:var(--text3);margin-top:6px;font-style:italic}
 .empty{padding:56px 24px;text-align:center;background:var(--bg2);border:1px dashed var(--border2);border-radius:14px}
@@ -98,8 +123,12 @@ footer{text-align:center;padding:18px;color:var(--text3);font-size:11px;border-t
   <div class="status">
     <span><span class="dotmini" id="d-flow"></span>Depth</span>
     <span><span class="dotmini" id="d-oi"></span>OI</span>
+    <span id="mkt-status"><span class="dotmini" id="d-mkt"></span><b id="mkt-lbl" style="color:var(--text3)">--</b></span>
     <span>next <b id="ns" style="color:var(--text)">--</b>s</span>
   </div>
+</div>
+<div id="closed-banner" style="display:none;background:#2a2410;border-bottom:1px solid #5c4a16;color:#e8c766;font-size:12px;font-weight:600;text-align:center;padding:7px 12px;letter-spacing:.2px">
+  🌙 <b>Market closed</b> — <span id="closed-reason" style="color:#f0d98a">—</span> · showing the last live snapshot (frozen at <span id="frozen-at">--</span>). Live data paused; swing review is end-of-day.
 </div>
 
 <div class="page">
@@ -109,10 +138,19 @@ footer{text-align:center;padding:18px;color:var(--text3);font-size:11px;border-t
     <button class="tab active" id="tab-scan" onclick="showTab('scan')" style="flex:1;padding:9px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;color:var(--green);background:var(--green3);border:none">Sharp Moves</button>
     <button class="tab" id="tab-heat" onclick="showTab('heat')" style="flex:1;padding:9px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;color:var(--text3);background:transparent;border:none">Heatmap</button>
     <button class="tab" id="tab-nifty" onclick="showTab('nifty')" style="flex:1;padding:9px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;color:var(--text3);background:transparent;border:none">NIFTY Direction</button>
+    <button class="tab" id="tab-swing" onclick="showTab('swing')" style="flex:1;padding:9px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;color:var(--text3);background:transparent;border:none">Swing Setups</button>
   </div>
 
   <div id="view-scan">
-  <div class="hint">Scored once every <b style="color:var(--text2)">3 minutes</b>. A stock only earns points if <b style="color:var(--text2)">price actually moved</b> that way in the window — buyers/sellers &amp; OI only add weight when they agree with the move, and shrink it when they fight it. Score builds through the day and never drops. Click a row for the breakdown · double-click for the chart.</div>
+  <div class="hint">Scored once every <b style="color:var(--text2)">3 minutes</b>. A stock only earns points if <b style="color:var(--text2)">price actually moved</b> that way in the window — buyers/sellers &amp; OI only add weight when they agree with the move, and shrink it when they fight it. Score builds through the day and never drops. Click a row for the breakdown · double-click for the chart.
+    <div style="margin-top:7px">Bars next to each score = how it's built:
+      <span class="clegend"><b style="background:#4D9EFF"></b>Price</span>
+      <span class="clegend"><b style="background:#F5A623"></b>Order book</span>
+      <span class="clegend"><b style="background:#B983FF"></b>OI</span>
+      <span class="clegend"><b style="background:#2DD4BF"></b>Futures</span>
+      <span style="margin-left:8px;color:var(--text3)">— all four standing tall = broad move; one lone bar = one-trick.</span>
+    </div>
+  </div>
 
   <div style="position:relative;margin-bottom:14px">
     <span style="position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:15px">&#9906;</span>
@@ -155,7 +193,7 @@ footer{text-align:center;padding:18px;color:var(--text3);font-size:11px;border-t
             <div style="font-size:9px;color:var(--text3);display:flex;gap:10px;flex-wrap:wrap">
               <span><span style="display:inline-block;width:8px;height:8px;background:var(--green);border-radius:2px"></span> bullish build</span>
               <span><span style="display:inline-block;width:8px;height:8px;background:var(--red);border-radius:2px"></span> bearish build</span>
-              <span><span style="display:inline-block;width:8px;height:8px;border:2px solid var(--amber);border-radius:2px"></span> divergence</span>
+              <span><span style="display:inline-block;width:8px;height:8px;border:2px solid var(--amber);border-radius:2px"></span> weak move (OI not fresh)</span>
             </div>
             <div style="display:flex;align-items:center;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px;background:var(--bg3)">
               <button onclick="niftyZoom(-3)" title="Zoom out (wider view) — or scroll down over the chart" style="width:22px;height:20px;border:none;background:transparent;color:var(--text2);font-size:13px;font-weight:800;cursor:pointer;border-radius:5px;line-height:1">−</button>
@@ -195,6 +233,33 @@ footer{text-align:center;padding:18px;color:var(--text3);font-size:11px;border-t
     <div style="font-size:11px;color:var(--text3);margin-top:14px;line-height:1.6;text-align:center">Each lens votes independently. When most agree, the direction is high-confidence. 1-2 agreeing = noise, 5-6 = strong trend.</div>
   </div>
 
+  <div id="view-swing" style="display:none">
+    <div class="hint">Where <b style="color:var(--text2)">strong one-sided position buildup</b> has happened over recent days, from the daily futures OI tape. That's the only job here — it finds the stocks worth a look. <b style="color:var(--text2)">You</b> then open the chart and check support/resistance, trendline, price action before planning an entry. Ranked by buildup strength · refreshes hourly.
+      <div style="margin-top:7px">
+        <span class="clegend"><b style="background:var(--green)"></b>ACCUMULATION (longs building)</span>
+        <span class="clegend"><b style="background:var(--red)"></b>DISTRIBUTION (shorts building)</span>
+        <span style="margin-left:8px;color:var(--text3)">Day strip: bright <b style="color:var(--green)">LB</b>/<b style="color:var(--red)">SB</b> = fresh buildup · faint SC/LU = positions closing. Tap a card for the OI line.</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin:2px 0 10px;flex-wrap:wrap">
+      <input id="swing-search" type="text" list="swing-syms" placeholder="🔎  Search any F&amp;O stock — type a few letters (e.g. WIP → WIPRO)"
+        oninput="swingSearchInput(this.value)" autocomplete="off"
+        style="flex:1;min-width:260px;font-size:12px;padding:9px 12px;border-radius:9px;background:var(--bg2);border:1px solid var(--border);color:var(--text1)">
+      <datalist id="swing-syms"></datalist>
+      <div id="swing-updated" style="font-size:10px;color:var(--text3)"></div>
+      <div id="swing-build" style="font-size:9.5px;color:var(--text3);font-family:monospace;opacity:.8" title="If the engine version is blank or old, your swing_engine.py didn't get replaced — delete __pycache__ and copy it again.">UI build oi-trend-v9 · engine —</div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <span class="sgsub">rank by</span>
+      <button class="sgbtn swmode sg-active" data-mode="all" onclick="setSwingMode('all')">All</button>
+      <button class="sgbtn swmode" data-mode="coiled" onclick="setSwingMode('coiled')">⟳ Coiled — OI↑, tight range</button>
+      <button class="sgbtn swmode" data-mode="buildup" onclick="setSwingMode('buildup')">Buildup — OI↑, price moving</button>
+      <button class="sgbtn swmode" data-mode="oirise" onclick="setSwingMode('oirise')">OI Rising 5D — price ignored</button>
+    </div>
+    <div id="swing-searched"></div>
+    <div id="swing-list"></div>
+  </div>
+
   <footer>Live 30-level depth via Upstox · Score by sharp-move ability (higher = stronger, no ceiling)<br>Paper trade &amp; log before real money · Exit by 2:30 PM</footer>
 </div>
 
@@ -203,10 +268,12 @@ function showTab(t){
   document.getElementById('view-scan').style.display=t==='scan'?'':'none';
   document.getElementById('view-heat').style.display=t==='heat'?'':'none';
   document.getElementById('view-nifty').style.display=t==='nifty'?'':'none';
-  const ts=document.getElementById('tab-scan'),th=document.getElementById('tab-heat'),tn=document.getElementById('tab-nifty');
-  [ts,th,tn].forEach(b=>{b.style.color='var(--text3)';b.style.background='transparent';});
+  document.getElementById('view-swing').style.display=t==='swing'?'':'none';
+  const ts=document.getElementById('tab-scan'),th=document.getElementById('tab-heat'),tn=document.getElementById('tab-nifty'),tw=document.getElementById('tab-swing');
+  [ts,th,tn,tw].forEach(b=>{b.style.color='var(--text3)';b.style.background='transparent';});
   if(t==='scan'){ts.style.color='var(--green)';ts.style.background='var(--green3)';}
   else if(t==='heat'){th.style.color='var(--amber)';th.style.background='var(--amber3)';}
+  else if(t==='swing'){tw.style.color='var(--blue)';tw.style.background='var(--blue3)';}
   else{tn.style.color='var(--blue)';tn.style.background='var(--blue3)';}
   // the treemap needs a real (non-zero) width to lay out, so (re)draw it the
   // moment the heat tab becomes visible.
@@ -404,11 +471,15 @@ function renderChart(data){
   const pRange=(pMax-pMin)||1;
   const yP=v=>pad+(pMax-v)/pRange*priceH;
   Object.assign(_chartMeta,{pMax,pMin,pRange});
-  // positioning scale (symmetric around 0) — only from candles that HAVE data
-  const flows=data.filter(d=>d.pos_flow!=null).map(d=>Math.abs(d.pos_flow));
-  const fMax=Math.max(...flows,0.001);
+  // positioning scale (symmetric around 0) — only from candles that HAVE data.
+  // Scaled off the TOTAL stacked magnitude (|futures|+|options|), not the net
+  // score, because when the two disagree they sit on OPPOSITE sides of the
+  // zero line and the bar has to fit both segments, not just their sum.
+  const totalMags=data.filter(d=>d.pos_flow!=null).map(d=>Math.abs(d.fut_score||0)+Math.abs(d.opt_score||0));
+  const fMax=Math.max(...totalMags,0.001);
   const volTop=pad+priceH+gapPV, volMid=volTop+volH/2;   // zero line (center of the build panel)
-  const gv=v=>Math.min(volH/2-3, Math.abs(v)/fMax*(volH/2-3));
+  const volCap=volH/2-6;
+  const gv=v=>Math.min(volCap, Math.abs(v)/fMax*volCap);
   const axisY=volTop+volH+axisH-6;
   _chartMeta.axisY=axisY; _chartMeta.volTop=volTop; _chartMeta.volH=volH;
   let svg=`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="font-family:Inter">`;
@@ -438,11 +509,12 @@ function renderChart(data){
     const up=d.c>=d.o;
     const col=up?'#10D98C':'#F04E6E';
     const futLbl={LB:'long buildup',SC:'short covering',SB:'short buildup',LU:'long unwinding'}[d.fut_type]||'';
+    const posLbl={PW:'put writing',CW:'call writing',PU:'put unwinding',CU:'call unwinding'}[d.pos_type]||'';
     const ttl=`${d.ts?String(d.ts).slice(11,16):''}  O${d.o} H${d.h} L${d.l} C${d.c}`+
               (d.pos_flow!=null?`  ·  build ${d.build_dir||'flat'}`:'  ·  positioning: no data yet')+
-              (d.pos_type?`  ·  options: ${d.pos_type} (raw ${d.pos_raw})`:'')+
-              (d.fut_type?`  ·  futures: ${d.fut_type} - ${futLbl} (raw ${d.fut_raw})`:'')+
-              (d.divergence?'  ·  DIVERGENCE (trap - options fighting price)':'');
+              (d.fut_type?`  ·  futures: ${d.fut_type} - ${futLbl} (raw OI ${d.fut_raw})`:'')+
+              (d.pos_type?`  ·  options: ${d.pos_type} - ${posLbl} (raw ${d.pos_raw})`:'')+
+              (d.divergence?'  ·  DIVERGENCE (futures/options disagree, or options fighting price)':'');
     // ---- price candle (rounded, thin wick) ----
     svg+=`<line x1="${x}" y1="${yP(d.h)}" x2="${x}" y2="${yP(d.l)}" stroke="${col}" stroke-width="1.3" stroke-linecap="round"/>`;
     const yo=yP(d.o), yc=yP(d.c);
@@ -452,20 +524,50 @@ function renderChart(data){
     if(d.divergence){
       svg+=`<rect x="${x-bw/2-1.5}" y="${bt-1.5}" width="${bw+3}" height="${bh+3}" fill="none" stroke="#F5A623" stroke-width="1.5" rx="3"/>`;
     }
-    // ---- positioning buildup bar (scored, continuous volume-style) ----
+    // ---- positioning buildup bar: FUTURES score + OPTIONS score, each its
+    // own segment INSIDE the same bar. Color is back to plain green=bullish
+    // / red=bearish (not factor-coded) — each segment is colored by ITS OWN
+    // sign and sits on ITS OWN side of the zero line, so when futures and
+    // options disagree you see a green segment on one side and a red one on
+    // the other, on the SAME candle, with no zooming needed. The two
+    // segments are told apart by fill style (solid futures / hatched-look
+    // lighter options) plus the tooltip and legend, not by hue, since hue is
+    // reserved for direction.
     const pf=d.pos_flow;
     if(pf==null){
-      // no OI measured for this candle yet — faint neutral tick on the zero line
+      // no data measured for this candle yet — faint neutral tick on the zero line
       svg+=`<rect x="${x-bw/2}" y="${volMid-1}" width="${bw}" height="2" fill="#242a38" rx="1"><title>${ttl}</title></rect>`;
       return;
     }
     anyBuild=true;
-    const barCol=pf>0?'#10D98C':pf<0?'#F04E6E':'#5A6275';
-    const bh2=Math.max(1.6,gv(pf));
-    const yBar=pf>=0?volMid-bh2:volMid;
-    svg+=`<rect x="${x-bw/2}" y="${yBar}" width="${bw}" height="${bh2}" fill="${barCol}" rx="${Math.min(1.5,bw/4)}" opacity="0.85"><title>${ttl}</title></rect>`;
+    const GREEN='#10D98C', RED='#F04E6E';
+    const segs=[
+      {key:'fut', lbl:'futures', val:d.fut_score||0, opacity:0.95, stroke:null},
+      {key:'opt', lbl:'options', val:d.opt_score||0, opacity:0.55, stroke:'#0A0B0F'},
+    ];
+    const posSegs=segs.filter(s=>s.val>0.02);
+    const negSegs=segs.filter(s=>s.val<-0.02);
+    const posSum=posSegs.reduce((s,c)=>s+c.val,0);
+    const negSum=negSegs.reduce((s,c)=>s+Math.abs(c.val),0);
+    const posH=posSum>0?Math.max(1.6,gv(posSum)):0;
+    const negH=negSum>0?Math.max(1.6,gv(negSum)):0;
+    let yUp=volMid;
+    posSegs.forEach(s=>{
+      const segH=posH*(s.val/posSum);
+      if(segH<0.4) return;
+      svg+=`<rect x="${x-bw/2}" y="${yUp-segH}" width="${bw}" height="${segH}" fill="${GREEN}" opacity="${s.opacity}" ${s.stroke?`stroke="${s.stroke}" stroke-width="0.6"`:''}><title>${ttl}  ·  ${s.lbl}: +${s.val.toFixed(2)}</title></rect>`;
+      yUp-=segH;
+    });
+    let yDn=volMid;
+    negSegs.forEach(s=>{
+      const segH=negH*(Math.abs(s.val)/negSum);
+      if(segH<0.4) return;
+      svg+=`<rect x="${x-bw/2}" y="${yDn}" width="${bw}" height="${segH}" fill="${RED}" opacity="${s.opacity}" ${s.stroke?`stroke="${s.stroke}" stroke-width="0.6"`:''}><title>${ttl}  ·  ${s.lbl}: ${s.val.toFixed(2)}</title></rect>`;
+      yDn+=segH;
+    });
     if(d.divergence){
-      svg+=`<rect x="${x-bw/2-1}" y="${yBar-1}" width="${bw+2}" height="${bh2+2}" fill="none" stroke="#F5A623" stroke-width="1.2" rx="2"/>`;
+      const top=posSum>0?yUp:volMid, bot=negSum>0?yDn:volMid;
+      svg+=`<rect x="${x-bw/2-1}" y="${top-1}" width="${bw+2}" height="${bot-top+2}" fill="none" stroke="#F5A623" stroke-width="1.2" rx="2"/>`;
     }
   });
   // axis labels
@@ -473,7 +575,9 @@ function renderChart(data){
   svg+=`<text x="2" y="${pad+priceH}" fill="#5A6275" font-size="10">${pMin.toFixed(0)}</text>`;
   svg+=`<text x="2" y="${volMid-volH/2+11}" fill="#3aa06a" font-size="9">bull</text>`;
   svg+=`<text x="2" y="${volMid+volH/2-2}" fill="#c0556a" font-size="9">bear</text>`;
-  svg+=`<text x="${axo+2}" y="${volTop-14}" fill="#4a5261" font-size="9">position buildup (scored — price-confirmed)</text>`;
+  svg+=`<text x="${axo+2}" y="${volTop-14}" fill="#4a5261" font-size="9">position buildup — green=bullish, red=bearish:</text>`;
+  svg+=`<rect x="${axo+238}" y="${volTop-21}" width="8" height="8" fill="#8b93a6" opacity="0.95" rx="1.5"/><text x="${axo+250}" y="${volTop-14}" fill="#8b93a6" font-size="9">futures (solid)</text>`;
+  svg+=`<rect x="${axo+338}" y="${volTop-21}" width="8" height="8" fill="#8b93a6" opacity="0.55" stroke="#0A0B0F" stroke-width="0.6" rx="1.5"/><text x="${axo+350}" y="${volTop-14}" fill="#8b93a6" font-size="9">options (lighter)</text>`;
   if(!anyBuild){
     svg+=`<text x="${W/2}" y="${volMid+4}" fill="#5A6275" font-size="10" text-anchor="middle">positioning fills in as option OI updates (live)</text>`;
   }
@@ -680,24 +784,120 @@ function buildRow(r,rank){
   const up=r.direction==='up';
   const action=up?'<span class="action act-buy">BUY CALL</span>':'<span class="action act-sell">BUY PUT</span>';
   const scoreCls=up?'sg':'sr';
-  const alignTag=r.aligned>=3?'<span class="align-tag">ALL 3 ALIGNED</span>':r.aligned===2?'<span style="font-size:9px;font-weight:800;padding:3px 9px;border-radius:20px;background:var(--bg3);color:var(--text2)">2/3 aligned</span>':'';
+  const alignTag=r.aligned>=4?'<span class="align-tag">ALL 4 ALIGNED</span>':r.aligned===3?'<span style="font-size:9px;font-weight:800;padding:3px 9px;border-radius:20px;background:var(--bg3);color:var(--text2)">3/4 aligned</span>':'';
   const reasons=(r.reasons||[]).join(' · ')||'building';
-  // breakdown of where the score came from
-  const bd=`<div class="detail"><div class="detail-hd">Last 3-min window — price leads, book &amp; OI confirm</div>
-    <div class="factor"><span class="factor-n">Price move</span><span class="factor-pts ${r.price_score>0?'fp-up':r.price_score<0?'fp-dn':'fp-0'}">${r.price_score>0?'+':''}${r.price_score}%</span><span class="factor-note">moved in 3min — ${r.price_score>0.05?'up (this is the gate)':r.price_score<-0.05?'down (this is the gate)':'flat → no points'}</span></div>
-    <div class="factor"><span class="factor-n">Order book</span><span class="factor-pts ${r.book_score>0?'fp-up':r.book_score<0?'fp-dn':'fp-0'}">${r.book_score>0?'+':''}${r.book_score}</span><span class="factor-note">bid/ask bias — ${r.book_score>0.2?'buyers heavier':r.book_score<-0.2?'sellers heavier':'balanced'}</span></div>
-    <div class="factor"><span class="factor-n">OI build</span><span class="factor-pts ${r.oi_score>0?'fp-up':r.oi_score<0?'fp-dn':'fp-0'}">${r.oi_score>0?'+':''}${r.oi_score}</span><span class="factor-note">option positioning — ${r.oi_score>0.2?'bullish':r.oi_score<-0.2?'bearish':'neutral'}</span></div>
-    <div class="detail-foot"><b>${r.aligned}/3 forces aligned ${up?'UP':'DOWN'}</b> in the last window · since ${r.since}. Points are earned only when price moves AND flow agrees. <span class="dbl-hint">Double-click for chart</span></div>
-  </div>`;
+  // breakdown of where the score came from — the 4 *_pts fields are an
+  // EXACT decomposition of the last window's award (they literally sum to
+  // it), so the bar widths below are a true proportional distribution of
+  // "which factor contributed how much", not an eyeballed approximation.
+  const fs=r.fut_score||0;
+  const fd=r.fut_detail||{};
+  const factorPts=[
+    {n:'Price move', pts:r.price_pts||0, note:`moved ${r.price_score>0?'+':''}${r.price_score}% in 3min — ${r.price_score>0.05?'up (this is the gate)':r.price_score<-0.05?'down (this is the gate)':'flat → no points'}`},
+    {n:'Order book', pts:r.book_pts||0, note:`bid/ask bias ${r.book_score>0?'+':''}${r.book_score} — ${r.book_score>0.2?'buyers heavier':r.book_score<-0.2?'sellers heavier':'balanced'}`},
+    {n:'OI build', pts:r.oi_pts||0, note:`option positioning ${r.oi_score>0?'+':''}${r.oi_score} — ${r.oi_score>0.2?'bullish':r.oi_score<-0.2?'bearish':'neutral'}`},
+    {n:'Futures build', pts:r.fut_pts||0, note:fd.label?`${fd.label} — futures ${fd.price_pct>=0?'+':''}${fd.price_pct}%, OI ${fd.d_oi>=0?'+':''}${fmt(fd.d_oi)}, ${fd.rel_vol}x avg volume`:(fs!==0?`futures ${fs>0?'bullish':'bearish'} buildup`:'neutral / warming up')},
+  ];
+  const maxPts=Math.max(...factorPts.map(f=>Math.abs(f.pts)),0.5);
+  const factorRows=factorPts.map(f=>{
+    const w=Math.round(Math.abs(f.pts)/maxPts*100);
+    const cls=f.pts>0.05?'up':f.pts<-0.05?'dn':'0';
+    return `<div class="factor">
+      <span class="factor-n">${f.n}</span>
+      <span class="factor-pts ${cls==='up'?'fp-up':cls==='dn'?'fp-dn':'fp-0'}">${f.pts>0?'+':''}${f.pts.toFixed(1)}pt</span>
+      <span class="factor-bar-wrap"><span class="factor-bar"><span class="factor-fill ${cls==='up'?'ff-up':cls==='dn'?'ff-dn':'ff-0'}" style="width:${w}%"></span></span><span class="factor-note">${f.note}</span></span>
+    </div>`;
+  }).join('');
+  // ===== DISTRIBUTION chart — each factor's own LONG/SHORT vote =====
+  // One bar per factor, height = how much that factor has driven the score
+  // all day, in its own colour. Each bar carries its OWN signal: is that
+  // factor pointing LONG or SHORT? A factor whose cumulative points AGREE
+  // with the day's winning direction votes that way; one that has been
+  // fighting it votes the OTHER way. So on a BUY-PUT stock you'll typically
+  // see 3 red SHORT bars and, if the book is buying into the fall, one green
+  // LONG bar — the disagreement is obvious at a glance.
+  const cumF=[
+    {n:'Price',   sub:'the move',  pts:r.cum_price_pts||0, col:'#4D9EFF'},
+    {n:'Order',   sub:'book',      pts:r.cum_book_pts||0,  col:'#F5A623'},
+    {n:'OI',      sub:'options',   pts:r.cum_oi_pts||0,    col:'#B983FF'},
+    {n:'Futures', sub:'buildup',   pts:r.cum_fut_pts||0,   col:'#2DD4BF'},
+  ];
+  const cMax=Math.max(...cumF.map(f=>Math.abs(f.pts)),1);
+  const scoreForPct=r.score||cumF.reduce((s,f)=>s+Math.max(0,f.pts),0)||1;
+  const dayDir=up?1:-1;   // the score's own winning direction
+  const bigCols=cumF.map(f=>{
+    const mag=Math.abs(f.pts);
+    // absolute LONG/SHORT vote: agree with the day dir -> that dir; fight it -> opposite
+    const sig=f.pts>0.05?dayDir : f.pts<-0.05?-dayDir : 0;
+    const sigTxt=sig>0?'LONG':sig<0?'SHORT':'—';
+    const sigCol=sig>0?'var(--green)':sig<0?'var(--red)':'var(--text3)';
+    const sigBg =sig>0?'rgba(16,217,140,.14)':sig<0?'rgba(240,78,110,.14)':'var(--bg3)';
+    const h=Math.max(sig!==0?3:0, Math.min(74, mag/cMax*74));
+    const pct=Math.round(f.pts/scoreForPct*100);
+    return `<div class="cbcol" title="${f.n} ${f.sub}: ${(f.pts>0?'+':'')+f.pts.toFixed(1)}pt (${pct}% of score) → ${sigTxt}">
+      <div class="cbarea"><div class="cbval" style="color:${f.col}">${sig!==0?mag.toFixed(1):'—'}</div><div class="cbbar" style="height:${h}px;background:${f.col}"></div></div>
+      <div class="cblbl">${f.n}<br><span class="cbsig" style="color:${sigCol};background:${sigBg}">${sigTxt}</span></div>
+    </div>`;
+  }).join('');
+  const bd=`<div class="detail"><div class="detail-split">
+    <div class="dcol">
+      <div class="detail-hd">Last 3-min window (live — changes each window)</div>
+      ${factorRows}
+      <div class="detail-foot"><b>${r.aligned}/4 forces aligned ${up?'UP':'DOWN'}</b> in the last window · since ${r.since}. Points are earned only when price moves AND flow agrees. <span class="dbl-hint">Double-click for chart</span></div>
+    </div>
+    <div class="dcol dcol-dist">
+      <div class="detail-hd">How the ${Math.round(r.score)} was built — each factor's LONG / SHORT vote</div>
+      <div class="cbig">${bigCols}</div>
+    </div>
+  </div></div>`;
+  // ===== right-side CONTRIBUTION BARS — how the running score is built =====
+  // Four coloured bars, one per factor, in a little box next to the score.
+  // Heights come from each factor's CUMULATIVE points (which sum to the
+  // score), so the bars physically GROW as the day's score grows, and their
+  // relative heights show at a glance whether the score is broad (all four
+  // standing up) or one-trick (a single tall bar). CSS transitions the
+  // height so they visibly climb on each update.
+  const FC=[
+    {n:'Price', pts:r.cum_price_pts||0, col:'#4D9EFF'},
+    {n:'Book',  pts:r.cum_book_pts||0,  col:'#F5A623'},
+    {n:'OI',    pts:r.cum_oi_pts||0,    col:'#B983FF'},
+    {n:'Fut',   pts:r.cum_fut_pts||0,   col:'#2DD4BF'},
+  ];
+  // scale to this row's own tallest factor so the little box always fills
+  // (tallest bar = full height, the rest proportional) — shows the split at
+  // a glance without an awkward mostly-empty box
+  const mMax=Math.max(...FC.map(f=>Math.abs(f.pts)),0.5);
+  const cbars=FC.map(f=>{
+    const pos=f.pts>0.05, neg=f.pts<-0.05;
+    const h=Math.max((pos||neg)?2:1, Math.min(24, Math.abs(f.pts)/mMax*24));
+    const c=pos?f.col:(neg?'var(--red)':'#2a2f3a');
+    return `<span class="cbar" style="height:${h}px;background:${c}"></span>`;
+  }).join('');
+  const cbarsTip=`contribution to score — Price ${(r.cum_price_pts||0).toFixed(0)} · Book ${(r.cum_book_pts||0).toFixed(0)} · OI ${(r.cum_oi_pts||0).toFixed(0)} · Futures ${(r.cum_fut_pts||0).toFixed(0)}`;
+  const barBox=`<div class="cbars" title="${cbarsTip}">${cbars}</div>`;
+  // ===== FUTURES-OI SESSION WATERMARK (faint, behind the row) ==============
+  // Stamps how far this stock's TOTAL futures OI has moved since 9:15 open —
+  // the session buildup/unwind at a glance. Teal = OI rising (fresh positions
+  // being added), red = OI falling (positions being closed). It sits behind
+  // the row content (content is lifted to z-index:1), so it reads as a
+  // background stamp, never covering the numbers.
+  const doi=(r.day_oi_pct!==undefined&&r.day_oi_pct!==null&&!isNaN(r.day_oi_pct))?(+r.day_oi_pct):0;
+  const doiChg=r.day_oi_chg||0;
+  const wmCol=doi>0?'rgba(45,212,191,0.14)':doi<0?'rgba(240,78,110,0.13)':'rgba(150,160,175,0.07)';
+  const wmTxt=doi!==0?`OI ${doi>0?'+':''}${doi.toFixed(1)}%`:'';
+  const wmTip=doi!==0?`Futures OI this session: ${doi>0?'+':''}${doi.toFixed(2)}% (${doiChg>=0?'+':''}${fmt(doiChg)} contracts vs 9:15 open) — ${doi>0?'positions being BUILT':'positions being CLOSED'}`:'';
+  const watermark=wmTxt?`<div class="oi-wm" title="${wmTip}" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:flex-end;padding-right:172px;font-size:34px;font-weight:900;letter-spacing:-1.5px;color:${wmCol};pointer-events:none;z-index:0;overflow:hidden;white-space:nowrap">${wmTxt}</div>`:'';
   return `<div class="row ${up?'up':'dn'}" onclick="rowClick(this,'${r.sym}')" ondblclick="rowDbl(this,'${r.sym}',event)">
-    <div class="row-main">
-      <div class="rank ${rank===1?'g':''}">${rank}</div>
-      <div class="info">
+    <div class="row-main" style="position:relative;overflow:hidden">
+      ${watermark}
+      <div class="rank ${rank===1?'g':''}" style="position:relative;z-index:1">${rank}</div>
+      <div class="info" style="position:relative;z-index:1">
         <div class="top"><span class="sym">${r.sym}</span>${(r.day_chg!==undefined&&r.day_chg!==null&&!isNaN(r.day_chg))?`<span style="font-size:13px;font-weight:800;color:${r.day_chg>=0?'var(--green)':'var(--red)'}">${r.day_chg>=0?'+':''}${(+r.day_chg).toFixed(2)}%</span>`:''}${action}${alignTag}</div>
         <div class="subline">${reasons}</div>
       </div>
-      <div class="right">
+      <div class="right" style="position:relative;z-index:1">
         <div class="ltp"><div class="ltp-v">${fmt(r.ltp)}</div><div class="ltp-l">LTP</div></div>
+        ${barBox}
         <div class="score"><div class="score-v ${scoreCls}">${Math.round(r.score)}</div><div class="score-l">score</div></div>
       </div>
     </div>
@@ -738,6 +938,337 @@ function renderSearch(){
   document.querySelectorAll('#search-result .row').forEach(row=>{const s=row.querySelector('.sym')?.textContent;if(openSyms.has(s))row.classList.add('open');});
 }
 
+// ---- SWING SETUPS (daily + hourly + options) ------------------------------
+var _swingData={}, _swingSig='', _swingHourly={}, _swingOpt={}, _sgState={}, _swingUniverse=[];
+function sgId(s){return 'sg-'+String(s).replace(/[^A-Za-z0-9]/g,'');}
+function sgState(sym){
+  const s=_sgState[sym]||(_sgState[sym]={});
+  if(!s.src)s.src='fut'; if(!s.days)s.days=10;
+  if(!s.show||typeof s.show!=='object')s.show={oi:true,price:true,vol:true};
+  // heal any missing keys so a toggle can never blank the chart
+  if(s.show.oi===undefined)s.show.oi=true;
+  if(s.show.price===undefined)s.show.price=true;
+  if(s.show.vol===undefined)s.show.vol=true;
+  return s;
+}
+function swingToggle(el,sym){ el.classList.toggle('open'); if(el.classList.contains('open')) swingRender(sym); }
+function swingSource(sym,src){ if(window.event)window.event.stopPropagation(); sgState(sym).src=src; swingRender(sym); }
+function swingSeries(sym,kind){ if(window.event)window.event.stopPropagation(); const st=sgState(sym); st.show[kind]=!st.show[kind]; if(!st.show.oi&&!st.show.price&&!st.show.vol) st.show[kind]=true; swingRender(sym); }
+function swingDays(sym,days){ if(window.event)window.event.stopPropagation(); sgState(sym).days=days; swingRender(sym); }
+function lastNDays(hist,days){
+  if(!days||days<=0) return hist;
+  const uniq=[...new Set(hist.map(h=>h.d))];
+  const keep=new Set(uniq.slice(-days));
+  return hist.filter(h=>keep.has(h.d));
+}
+// central render: reads this card's {src,kind,days} and draws the right thing
+function swingRender(sym){
+  try{ _swingRender(sym); }
+  catch(e){ console.error('[swing render]',e); const h=document.getElementById(sgId(sym)); if(h) h.innerHTML='<div style="font-size:11px;color:var(--amber);padding:10px">chart error — try another range. ('+(e&&e.message||e)+')</div>'; }
+}
+function _swingRender(sym){
+  const st=sgState(sym), host=document.getElementById(sgId(sym)); if(!host) return;
+  host.dataset.drawn='1';
+  const detail=host.closest('.detail');
+  if(detail){
+    detail.querySelectorAll('.sgser').forEach(b=>b.classList.toggle('sg-active',!!st.show[b.dataset.kind]));
+    detail.querySelectorAll('.sgday').forEach(b=>b.classList.toggle('sg-active',+b.dataset.days===st.days));
+    const fc=detail.querySelector('.sgfut-ctl'); if(fc) fc.style.display=st.src==='opt'?'none':'';
+    const sel=detail.querySelector('.sgsel'); if(sel) sel.value=st.src;
+  }
+  if(st.src==='opt') swingRenderOptions(sym,host);
+  else swingRenderFutures(sym,host,st);
+}
+function swingEnsureHourly(sym){
+  if(_swingHourly[sym]!==undefined) return;
+  _swingHourly[sym]=null;
+  fetch('/swinghist?sym='+encodeURIComponent(sym)).then(r=>r.json()).then(j=>{
+    _swingHourly[sym]=(j&&j.hourly)||[];
+    if(sgState(sym).src==='fut') swingRender(sym);
+  }).catch(()=>{ _swingHourly[sym]=[]; });
+}
+function swingRenderFutures(sym,host,st){
+  const s=_swingData[sym]; if(!s){ host.innerHTML=''; return; }
+  const hourly=_swingHourly[sym];
+  const isHourly=Array.isArray(hourly)&&hourly.length>0;
+  let hist=isHourly?hourly:(s.hist||[]);
+  hist=lastNDays(hist,st.days);
+  const n=hist.length;
+  if(!n){ host.innerHTML='<div style="font-size:10px;color:var(--text3)">no history in range</div>'; swingEnsureHourly(sym); return; }
+  // ALL three series overlaid on one chart, each normalised to its OWN range so
+  // the SHAPES line up (do OI, price & volume move together?). Absolute numbers
+  // are in the legend since they live on different scales.
+  const SER=[{k:'oi',key:'oi',col:'#2DD4BF',lbl:'OI'},{k:'vol',key:'v',col:'#4D9EFF',lbl:'Vol'},{k:'price',key:'c',col:'#F5A623',lbl:'Price'}];
+  const priceReal=isHourly;   // hourly carries the ACTUAL cash price; daily preview is futures
+  let active=SER.filter(se=>st.show[se.k]);
+  if(!active.length){ st.show={oi:true,price:true,vol:true}; active=SER.slice(); }  // never blank
+  const W=560,H=180,padL=12,padR=14,padT=22,padB=26, plotW=W-padL-padR, plotH=H-padT-padB;
+  const X=i=> padL+(n<=1?0:i/(n-1)*plotW);
+  // faint horizontal guides (no numbers — mixed scales)
+  let grid='';
+  for(let g=1;g<3;g++){const gy=padT+plotH/3*g; grid+=`<line x1="${padL}" y1="${gy}" x2="${W-padR}" y2="${gy}" stroke="#14181f" stroke-width="1"/>`;}
+  // faint DOTTED session-break lines + ONE date label centred under each day,
+  // PLUS per-session: a faint OI-change % WATERMARK behind the segment and a
+  // classification LABEL at the top (Long Buildup / Short Buildup / Short
+  // Covering / Long Unwinding) read from that session's price vs OI direction.
+  let breaks='',xlab='',segWm='',prevLast=-1;
+  const gap=n>1?plotW/(n-1):0;
+  const days=[...new Set(hist.map(h=>h.d))];
+  days.forEach(day=>{
+    const idxs=[]; hist.forEach((h,i)=>{if(h.d===day)idxs.push(i);});
+    const first=idxs[0], last=idxs[idxs.length-1];
+    if(first>0){ const bx=(X(first)-gap/2).toFixed(1); breaks+=`<line x1="${bx}" y1="${padT}" x2="${bx}" y2="${padT+plotH}" stroke="#2a3140" stroke-width="1" stroke-dasharray="2 4"/>`; }
+    const mid=((X(first)+X(last))/2).toFixed(1);
+    xlab+=`<text x="${mid}" y="${H-7}" fill="#6a7486" font-size="9.5" text-anchor="middle">${day}</text>`;
+    // --- this session's OI change + buildup/unwind classification ---
+    // Hourly: measure first->last WITHIN the day. Daily (one point per day):
+    // measure against the PREVIOUS day's point, so each session still shows a
+    // real day-over-day OI change instead of a flat 0%.
+    const baseIdx=(idxs.length>=2)?first:(prevLast>=0?prevLast:first);
+    prevLast=last;
+    const f0=hist[baseIdx], f1=hist[last];
+    const oi0=+f0.oi, oi1=+f1.oi, p0=+f0.c, p1=+f1.c;
+    const dOi=oi1-oi0, dOiPct=oi0?(dOi/oi0*100):0;
+    const dPricePct=p0?((p1-p0)/p0*100):0;
+    const oiUp=dOiPct>0.8, oiDn=dOiPct<-0.8;
+    const segLeft=first>0?X(first)-gap/2:padL, segRight=last<n-1?X(last)+gap/2:W-padR;
+    const bandW=segRight-segLeft, smid=(segLeft+segRight)/2;
+    // brighter OI% stamp: teal when OI rose, red when it fell, grey when flat
+    const wmCol=oiUp?'rgba(45,212,191,0.42)':oiDn?'rgba(240,78,110,0.40)':'rgba(160,170,185,0.26)';
+    if(bandW>20){
+      const fs=Math.min(8.5,Math.max(6,bandW*0.052));
+      const tip=`${day}: futures OI ${dOiPct>=0?'+':''}${dOiPct.toFixed(2)}% (${dOi>=0?'+':''}${fmtShort(dOi)} contracts), price ${dPricePct>=0?'+':''}${dPricePct.toFixed(2)}%`;
+      segWm+=`<text x="${smid.toFixed(1)}" y="${(padT+plotH*0.64).toFixed(1)}" fill="${wmCol}" font-size="${fs.toFixed(1)}" font-weight="700" text-anchor="middle">${dOiPct>=0?'+':''}${dOiPct.toFixed(1)}%<title>${tip}</title></text>`;
+    }
+  });
+  // each active series: its own min-max -> normalised line + dots
+  let lines='',dots='',leg='';
+  active.forEach(se=>{
+    const vals=hist.map(h=>h[se.key]);
+    const mx=Math.max(...vals),mn=Math.min(...vals),rg=(mx-mn)||1;
+    const Yv=v=> padT+(1-(v-mn)/rg)*plotH;
+    let ln='';
+    vals.forEach((v,i)=>{ ln+=(i?'L':'M')+X(i).toFixed(1)+' '+Yv(v).toFixed(1)+' '; });
+    lines+=`<path d="${ln}" fill="none" stroke="${se.col}" stroke-width="1.3" stroke-linejoin="round" opacity="0.95"/>`;
+    vals.forEach((v,i)=>{ dots+=`<circle cx="${X(i).toFixed(1)}" cy="${Yv(v).toFixed(1)}" r="${isHourly?1.1:1.7}" fill="${se.col}"><title>${hist[i].d}${hist[i].hh?' '+hist[i].hh:''} · ${se.lbl} ${fmtShort(v)}</title></circle>`; });
+    const rising=vals[n-1]>=vals[0];
+    const lbl=(se.k==='price'&&priceReal)?'Price (cash)':se.lbl;
+    leg+=`<span style="color:${se.col};font-weight:800;margin-right:14px">● ${lbl} ${fmtShort(vals[n-1])} ${rising?'▲':'▼'}</span>`;
+  });
+  const svg=`<svg width="100%" viewBox="0 0 ${W} ${H}" style="display:block">${grid}${segWm}${breaks}${lines}${dots}${xlab}</svg>`;
+  const ndays=days.length;
+  const scope=isHourly?`${n} hourly points · ${ndays} day${ndays>1?'s':''}`:(_swingHourly[sym]===null?'daily (loading hourly…)':`${n} days`);
+  host.innerHTML=`<div style="font-size:10.5px;margin:2px 0 5px">${leg}<span style="color:var(--text3);font-weight:400">· ${scope}</span></div>
+    <div class="sg-plot" style="position:relative">${svg}
+      <div class="xh-line" style="position:absolute;top:${(padT/H*100).toFixed(1)}%;height:${(plotH/H*100).toFixed(1)}%;width:1px;background:#8893a6;left:0;display:none;pointer-events:none"></div>
+      <div class="xh-hline" style="position:absolute;left:0;right:0;height:1px;background:#8893a6;top:0;display:none;pointer-events:none"></div>
+      <div class="xh-time" style="position:absolute;bottom:1px;transform:translateX(-50%);background:#1c2230;border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-size:9.5px;font-weight:700;color:var(--text1);white-space:nowrap;display:none;pointer-events:none"></div>
+      <div class="xh-val" style="position:absolute;top:0;transform:translateX(-50%);background:rgba(28,34,48,.95);border:1px solid var(--border);border-radius:5px;padding:2px 8px;font-size:10px;white-space:nowrap;display:none;pointer-events:none"></div>
+    </div>`;
+  // ---- TradingView-style crosshair: vertical line snaps to the nearest point
+  // (time on the x-axis + values chip), horizontal line follows the cursor ----
+  const plotEl=host.querySelector('.sg-plot');
+  if(plotEl){
+    const lineEl=plotEl.querySelector('.xh-line'), hlineEl=plotEl.querySelector('.xh-hline');
+    const timeEl=plotEl.querySelector('.xh-time'), valEl=plotEl.querySelector('.xh-val');
+    const xsVB=hist.map((h,i)=>X(i));
+    const topPx=()=>plotEl.clientHeight*padT/H, botPx=()=>plotEl.clientHeight*(padT+plotH)/H;
+    plotEl.onmousemove=function(e){
+      const r=plotEl.getBoundingClientRect(); if(!r.width) return;
+      const vbx=(e.clientX-r.left)/r.width*W;
+      let bi=0,bd=1e9; for(let i=0;i<xsVB.length;i++){const dd=Math.abs(xsVB[i]-vbx); if(dd<bd){bd=dd;bi=i;}}
+      const leftPct=(xsVB[bi]/W*100).toFixed(2)+'%';
+      const h=hist[bi];
+      lineEl.style.left=leftPct; lineEl.style.display='block';
+      let my=e.clientY-r.top; const tp=topPx(), bp=botPx(); my=Math.max(tp,Math.min(bp,my));
+      hlineEl.style.top=my.toFixed(1)+'px'; hlineEl.style.display='block';
+      timeEl.style.left=leftPct; timeEl.textContent=(h.d||'')+(h.hh?' '+h.hh:''); timeEl.style.display='block';
+      valEl.style.left=leftPct; valEl.innerHTML=active.map(se=>`<span style="color:${se.col};font-weight:800;margin:0 5px">${fmtShort(h[se.key])}</span>`).join(''); valEl.style.display='block';
+    };
+    plotEl.onmouseleave=function(){ lineEl.style.display='none'; hlineEl.style.display='none'; timeEl.style.display='none'; valEl.style.display='none'; };
+  }
+  swingEnsureHourly(sym);
+}
+function swingRenderOptions(sym,host){
+  const o=_swingOpt[sym];
+  if(o===undefined){
+    _swingOpt[sym]=null;
+    host.innerHTML='<div style="font-size:11px;color:var(--text3);padding:10px">Loading live option chain…</div>';
+    fetch('/swingopt?sym='+encodeURIComponent(sym)).then(r=>r.json()).then(j=>{
+      _swingOpt[sym]=(j&&j.options)||{};
+      if(sgState(sym).src==='opt') swingRenderOptions(sym,host);
+    }).catch(()=>{_swingOpt[sym]={};});
+    return;
+  }
+  if(o===null){ host.innerHTML='<div style="font-size:11px;color:var(--text3);padding:10px">Loading live option chain…</div>'; return; }
+  if(!o || !o.ladder || !o.ladder.length){
+    const why=(o&&o.error)?o.error:'live chain not available';
+    host.innerHTML='<div style="font-size:11px;color:var(--text3);padding:10px;line-height:1.6">Option walls come from the <b>live</b> exchange chain — <span style="color:var(--amber)">'+why+'</span>.<br>The walls are saved automatically the first time you open this stock on a <b>trading day</b>; after that they show here even when the market is shut. No saved snapshot for this stock yet.</div>';
+    return;
+  }
+  const staleBadge=o.stale?`<span style="font-size:9.5px;font-weight:700;color:#e8c766;background:#2a2410;border:1px solid #5c4a16;border-radius:5px;padding:2px 7px;margin-left:6px" title="Market is closed — showing the last live option chain captured${o.as_of?' at '+o.as_of:''}">last snapshot${o.as_of?' · '+o.as_of:''}</span>`:'';
+  const lad=o.ladder, maxOI=Math.max(1,...lad.map(x=>Math.max(x.coi,x.poi)));
+  const W=560,H=200,padL=10,padR=10,padT=28,padB=30, plotW=W-padL-padR, plotH=H-padT-padB, base=padT+plotH;
+  const m=lad.length, slot=plotW/m, bw=Math.min(13,slot*0.36);
+  let bars='',xl='';
+  lad.forEach((x,i)=>{
+    const cx=padL+slot*(i+0.5);
+    const ph=x.poi/maxOI*plotH, ch=x.coi/maxOI*plotH;
+    const isSup=Math.abs(x.k-o.put_wall)<0.01, isRes=Math.abs(x.k-o.call_wall)<0.01;
+    // put OI (support side) green, call OI (resistance) red, side by side
+    bars+=`<rect x="${(cx-bw-1).toFixed(1)}" y="${(base-ph).toFixed(1)}" width="${bw}" height="${ph.toFixed(1)}" fill="#10D98C" opacity="${isSup?1:0.6}" rx="1"><title>${x.k} PUT OI ${x.poi.toLocaleString('en-IN')}${isSup?' — SUPPORT wall':''}</title></rect>`;
+    bars+=`<rect x="${(cx+1).toFixed(1)}" y="${(base-ch).toFixed(1)}" width="${bw}" height="${ch.toFixed(1)}" fill="#F04E6E" opacity="${isRes?1:0.6}" rx="1"><title>${x.k} CALL OI ${x.coi.toLocaleString('en-IN')}${isRes?' — RESISTANCE wall':''}</title></rect>`;
+    const near=Math.abs(x.k-o.atm)<0.01;
+    xl+=`<text x="${cx.toFixed(1)}" y="${H-8}" fill="${near?'#E8EAF0':'#5A6275'}" font-size="8.5" font-weight="${near?800:400}" text-anchor="middle">${x.k}</text>`;
+  });
+  const svg=`<svg width="100%" viewBox="0 0 ${W} ${H}" style="display:block">
+    <line x1="${padL}" y1="${base}" x2="${W-padR}" y2="${base}" stroke="#2a3140" stroke-width="1"/>
+    ${bars}${xl}
+    <text x="${padL}" y="14" fill="#10D98C" font-size="10" font-weight="700">■ Put OI = support</text>
+    <text x="${W-padR}" y="14" fill="#F04E6E" font-size="10" font-weight="700" text-anchor="end">Call OI = resistance ■</text>
+  </svg>`;
+  const pcrCol=o.pcr>=1?'#10D98C':o.pcr>0?'#F5A623':'var(--text3)';
+  const read = o.put_wall<o.spot && o.call_wall>o.spot
+    ? `Writers defending <b style="color:var(--green)">₹${o.put_wall}</b> (support) and capping <b style="color:var(--red)">₹${o.call_wall}</b> (resistance).`
+    : `Call wall ₹${o.call_wall} · Put wall ₹${o.put_wall}.`;
+  host.innerHTML=`
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;margin:2px 0 6px">
+      <span style="color:var(--text3)">spot <b style="color:var(--text1)">${fmt(o.spot)}</b></span>
+      <span style="color:var(--text3)">PCR <b style="color:${pcrCol}">${o.pcr}</b></span>
+      <span style="color:var(--text3)">Put wall (support) <b style="color:var(--green)">${fmt(o.put_wall)}</b></span>
+      <span style="color:var(--text3)">Call wall (resistance) <b style="color:var(--red)">${fmt(o.call_wall)}</b></span>
+      <span style="color:var(--text3)">exp ${o.expiry}</span>${staleBadge}
+    </div>
+    ${svg}
+    <div style="font-size:10.5px;color:var(--text2);margin-top:6px;line-height:1.5">${read} <span style="color:var(--text3)">If your chart's S/R lines up with a wall, that's confluence — writers are defending it.</span></div>`;
+}
+function fmtShort(v){v=+v;if(!isFinite(v))return'--';const a=Math.abs(v);if(a>=1e7)return(v/1e7).toFixed(2)+'Cr';if(a>=1e5)return(v/1e5).toFixed(2)+'L';if(a>=1e3)return(v/1e3).toFixed(1)+'k';return(a<100?v.toFixed(1):Math.round(v)).toString();}
+var _swingMode='all', _lastSwingList=[], _lastSwingUpdated='', _searchedSym='', _searchedCard=null, _swingOiList=[];
+function setSwingMode(m){
+  _swingMode=m;
+  document.querySelectorAll('.swmode').forEach(b=>b.classList.toggle('sg-active',b.dataset.mode===m));
+  _swingSig='';                       // force a re-render under the new filter
+  renderSwing(_lastSwingList,_lastSwingUpdated);
+}
+function renderSwing(list, updated){
+  const el=document.getElementById('swing-list'); if(!el) return;
+  _lastSwingList=list||[]; _lastSwingUpdated=updated;
+  // "OI Rising 5D" is a SEPARATE pre-ranked list (pure 5-day OI growth, price
+  // ignored) — it has its own source, not a type-filter of the setups list.
+  const full=(_swingMode==='oirise')?(_swingOiList||[]):(list||[]);
+  // filter by the selected mode (coiled = OI↑ tight range, buildup = moving);
+  // 'all' and 'oirise' show their whole list. Drop the stock currently pinned in
+  // the search box so there's never a duplicate card / duplicate chart id.
+  let shown=(_swingMode==='all'||_swingMode==='oirise')?full:full.filter(s=>s.type===_swingMode);
+  if(_searchedSym) shown=shown.filter(s=>s.sym!==_searchedSym);
+  const up=document.getElementById('swing-updated');
+  if(up) up.textContent = full.length ? `${shown.length} shown · ${full.length} total · ${updated||'--'}` : '';
+  const sig=(updated||'')+'|'+full.length+'|'+_swingMode+'|'+_searchedSym;
+  _swingData={}; full.forEach(s=>{_swingData[s.sym]=s;});
+  // keep the pinned search result's data alive so its chart doesn't go blank
+  if(_searchedSym && _searchedCard) _swingData[_searchedSym]=_searchedCard;
+  if(sig===_swingSig && el.children.length){ return; }
+  _swingSig=sig;
+  if(!full.length){
+    el.innerHTML='<div class="empty"><div class="empty-big">Scanning the daily tape…</div><div class="empty-sub">Swing setups build from the daily futures OI. First scan runs shortly after launch and refreshes hourly.</div></div>';
+    return;
+  }
+  if(!shown.length){
+    el.innerHTML='<div class="empty"><div class="empty-big">No '+_swingMode+' setups right now</div><div class="empty-sub">Try <b>All</b>, or the other mode. Coiled = OI rising while price holds a tight range. Buildup = OI rising with price already moving.</div></div>';
+    return;
+  }
+  const openSyms=new Set([...document.querySelectorAll('#swing-list .row.open')].map(r=>r.dataset.sym));
+  el.innerHTML=shown.map((s,i)=>swingCard(s,i,openSyms.has(s.sym))).join('');
+  openSyms.forEach(sym=>{const g=document.getElementById(sgId(sym)); if(g){g.dataset.drawn='';swingRender(sym);}});
+}
+var _swClsCol={LB:'var(--green)',SC:'#6FE3BE',SB:'var(--red)',LU:'#F7899C',UP:'var(--green)',DN:'var(--red)'};
+function swingCard(s,i,isOpen){
+  const coiled=s.type==='coiled';
+  const oirise=s.type==='oirise';                 // pure 5-day OI growth, price ignored
+  const flat=(s.dir==='flat'||!s.dir)&&!oirise;   // oirise still shows a score
+  const long=s.dir==='long';
+  const dirCol=oirise?'#2DD4BF':coiled?'var(--amber)':flat?'var(--text3)':long?'var(--green)':'var(--red)';
+  const dirBg=oirise?'rgba(45,212,191,0.15)':coiled?'var(--amber3)':flat?'var(--bg3)':long?'var(--green3)':'var(--red3)';
+  const tag=oirise?`OI RISING ▲ ${s.oi_chg_pct>=0?'+':''}${s.oi_chg_pct}% / ${s.lb||5}D`:coiled?'COILED ⟳':flat?'INSPECT':long?'ACCUMULATION ▲':'DISTRIBUTION ▼';
+  const strip=(s.days||[]).map(dz=>{
+    const c=_swClsCol[dz.cls]||'var(--text3)';
+    return `<div title="${dz.date}  ${dz.cls}  ${dz.chg>0?'+':''}${dz.chg}%${dz.d_oi?'  OI '+(dz.d_oi>0?'+':'')+dz.d_oi.toLocaleString('en-IN'):''}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0">
+      <div style="width:100%;height:14px;background:${c};opacity:${dz.cls==='LB'||dz.cls==='SB'?0.95:0.5};border-radius:2px"></div>
+      <div style="font-size:7.5px;color:var(--text3);white-space:nowrap">${dz.cls}</div>
+    </div>`;
+  }).join('');
+  const rankHtml=(i>=0)?`<div class="rank ${i===0?'g':''}">${i+1}</div>`:`<div class="rank">🔎</div>`;
+  const scoreHtml=flat?'':`<div class="right"><div class="score"><div class="score-v ${(oirise||long)?'sg':'sr'}">${Math.round(s.score)}</div><div class="score-l">quality</div></div></div>`;
+  return `<div class="row ${flat?'':long?'up':'dn'}${isOpen?' open':''}" data-sym="${s.sym}" style="cursor:pointer" onclick="swingToggle(this,'${s.sym}')">
+    <div class="row-main" style="align-items:flex-start">
+      ${rankHtml}
+      <div class="info" style="flex:1">
+        <div class="top">
+          <span class="sym">${s.sym}</span>
+          <span class="action" style="background:${dirBg};color:${dirCol}">${tag}</span>
+          ${flat?'':`<span style="font-size:10px;font-weight:800;color:${dirCol}">${s.strength}${coiled?' · '+s.range_pct+'% range':oirise?` · OI up ${s.rising_days||0}/${s.lb||5}d`:' buildup'}</span>`}
+        </div>
+        <div class="subline" style="line-height:1.55;color:var(--text2);margin-top:4px">${s.line||''}</div>
+        ${strip?`<div style="display:flex;gap:2px;margin-top:9px;max-width:520px">${strip}</div>`:''}
+        <div style="display:flex;gap:16px;margin-top:9px;font-size:11px;flex-wrap:wrap">
+          <span style="color:var(--text3)">LTP <b style="color:var(--text1)">${fmt(s.ltp)}</b></span>
+          <span style="color:var(--text3)">range <b style="color:var(--text2)">${fmt(s.lo)}–${fmt(s.hi)}</b> (${s.pos||'—'})</span>
+          <span style="color:var(--text3)">check the chart: S/R · trendline · price action</span>
+        </div>
+        <div class="expand" style="margin-top:8px">▾ tap for Futures OI &amp; Options walls</div>
+      </div>
+      ${scoreHtml}
+    </div>
+    <div class="detail" onclick="event.stopPropagation()">
+      <div class="sgtoggle">
+        <select class="sgsel" onclick="event.stopPropagation()" onchange="event.stopPropagation();swingSource('${s.sym}',this.value)">
+          <option value="fut">Futures</option>
+          <option value="opt">Options</option>
+        </select>
+        <span class="sgfut-ctl">
+          <span class="sgsub">range</span>
+          <button class="sgbtn sgday" data-days="2" onclick="event.stopPropagation();swingDays('${s.sym}',2)">2D</button>
+          <button class="sgbtn sgday" data-days="5" onclick="event.stopPropagation();swingDays('${s.sym}',5)">5D</button>
+          <button class="sgbtn sgday sg-active" data-days="10" onclick="event.stopPropagation();swingDays('${s.sym}',10)">10D</button>
+          <span class="sgsub" style="margin-left:8px">lines</span>
+          <button class="sgbtn sgser sg-active" data-kind="oi" onclick="event.stopPropagation();swingSeries('${s.sym}','oi')">OI</button>
+          <button class="sgbtn sgser sg-active" data-kind="price" onclick="event.stopPropagation();swingSeries('${s.sym}','price')">Price</button>
+          <button class="sgbtn sgser sg-active" data-kind="vol" onclick="event.stopPropagation();swingSeries('${s.sym}','vol')">Vol</button>
+        </span>
+      </div>
+      <div class="swing-graph" id="${sgId(s.sym)}"></div>
+    </div>
+  </div>`;
+}
+// ---- search any stock in the swing tab ----
+var _swSearchT=null;
+function swingSearchInput(v){
+  if(_swSearchT) clearTimeout(_swSearchT);
+  const q=(v||'').toUpperCase().replace(/[^A-Z0-9&-]/g,'').trim();
+  const box=document.getElementById('swing-searched');
+  if(!q){ if(box) box.innerHTML=''; if(_searchedSym){_searchedSym='';_searchedCard=null;_swingSig='';renderSwing(_lastSwingList,_lastSwingUpdated);} return; }
+  // resolve a PARTIAL typed string to a real symbol: exact > starts-with > contains
+  let target=q;
+  if(_swingUniverse.length && _swingUniverse.indexOf(q)<0){
+    const pre=_swingUniverse.filter(s=>s.indexOf(q)===0);
+    const sub=pre.length?pre:_swingUniverse.filter(s=>s.indexOf(q)>=0);
+    if(sub.length) target=sub[0];
+  }
+  _swSearchT=setTimeout(()=>{
+    if(box) box.innerHTML='<div style="font-size:11px;color:var(--text3);padding:8px 2px">Looking up '+target+'…</div>';
+    fetch('/swinglookup?sym='+encodeURIComponent(target)).then(r=>r.json()).then(j=>{
+      const c=j&&j.card;
+      if(c && c.unknown){ if(box) box.innerHTML='<div style="font-size:11px;color:var(--text3);padding:8px 2px">“'+q+'” is not in the F&amp;O universe. Check the symbol.</div>'; return; }
+      if(!c || !c.sym){ if(box) box.innerHTML='<div style="font-size:11px;color:var(--amber);padding:8px 2px">Search backend not ready — your <b>swing_engine.py</b> &amp; <b>orderflow_scanner.py</b> need the latest version (the /swinglookup endpoint). Replace both and restart the scanner.</div>'; return; }
+      _swingData[c.sym]=c; _searchedCard=c;
+      if(box) box.innerHTML='<div style="font-size:10px;color:var(--text3);margin:4px 2px 8px">Search result — tap to open charts</div>'+swingCard(c,-1,true);
+      _sgState[c.sym]={src:'fut',show:{oi:true,price:true,vol:true},days:10};
+      // drop this sym from the ranked list so there's no duplicate chart id
+      _searchedSym=c.sym; _swingSig=''; renderSwing(_lastSwingList,_lastSwingUpdated);
+      swingRender(c.sym);
+    }).catch(()=>{ if(box) box.innerHTML='<div style="font-size:11px;color:var(--text3);padding:8px 2px">lookup failed — is the scanner running?</div>'; });
+  },450);
+}
 function _safe(fn,label){try{fn();}catch(e){console.error('[render '+label+']',e);}}
 async function update(){
   let d;
@@ -750,12 +1281,32 @@ async function update(){
     console.error('[update] /data parse/fetch failed:',e);
     return;
   }
+  const closed=!!d.market_closed;
   // each section renders independently — one failure never blanks the others
-  _safe(()=>{document.getElementById('ns').textContent=d.next_scan_in||'--';},'status');
-  _safe(()=>{document.getElementById('d-flow').className='dotmini'+(d.stale?' off':'');
+  _safe(()=>{document.getElementById('ns').textContent=closed?'—':(d.next_scan_in||'--');},'status');
+  _safe(()=>{
+    // market open/closed indicator + banner
+    const bn=document.getElementById('closed-banner');
+    const dm=document.getElementById('d-mkt'), ml=document.getElementById('mkt-lbl');
+    if(closed){
+      bn.style.display='block';
+      const reason=d.market_reason||'Market closed';
+      document.getElementById('closed-reason').textContent=reason;
+      document.getElementById('frozen-at').textContent=d.frozen_at||d.scan_time||'--';
+      // short label for the header chip (first word of the reason: Holiday/Weekend/Pre-market/After-hours)
+      const shortR=/holiday/i.test(reason)?'Holiday':/weekend/i.test(reason)?'Weekend':/pre-market/i.test(reason)?'Pre-open':/after/i.test(reason)?'Closed':'Closed';
+      dm.className='dotmini off'; ml.textContent=shortR; ml.style.color='#e8c766';
+      ml.title=reason;
+    }else{
+      bn.style.display='none';
+      dm.className='dotmini'; ml.textContent='Open'; ml.style.color='var(--green)';
+    }
+  },'market');
+  _safe(()=>{document.getElementById('d-flow').className='dotmini'+((d.stale&&!closed)?' off':'');
     document.getElementById('d-oi').className='dotmini'+(d.bridge_alive?'':' off');
     const err=document.getElementById('err');
-    if(d.error){err.textContent='⚠ '+d.error;err.classList.add('show');}
+    if(closed){err.classList.remove('show');}   // frozen on purpose — never show the "stale/not running" warnings
+    else if(d.error){err.textContent='⚠ '+d.error;err.classList.add('show');}
     else if(!d.bridge_alive){err.textContent='OI engine not running — price + orderflow still rank fine; OI just adds confirmation. Use start.py for both.';err.classList.add('show');}
     else err.classList.remove('show');},'header');
   _safe(()=>{_session=d.session||[];_sessionAll=d.session_all||[];render();if(_searchTerm)renderSearch();},'session');
@@ -763,6 +1314,13 @@ async function update(){
   _safe(()=>renderSignal(d.nifty_signal),'signal');
   _safe(()=>renderChart(d.nifty_chart),'chart');
   _safe(()=>renderHeatmap(d.sector_perf, d.treemap),'heatmap');
+  _safe(()=>{_swingOiList=d.swing_oi||[];
+    const sb=document.getElementById('swing-build');
+    if(sb) sb.innerHTML='UI build oi-trend-v9 · engine '+(d.swing_ver?('<b style="color:var(--green)">'+d.swing_ver+'</b>'):'<b style="color:var(--amber)">— (old .py still loaded)</b>');
+    renderSwing(d.swing, d.swing_updated);},'swing');
+  _safe(()=>{ if(d.universe&&d.universe.length){ _swingUniverse=d.universe;
+    const dl=document.getElementById('swing-syms');
+    if(dl&&dl.children.length!==d.universe.length){ dl.innerHTML=d.universe.map(s=>'<option value="'+s+'"></option>').join(''); } } },'swinguniv');
 }
 update();setInterval(update,3000);
 setInterval(()=>{const e=document.getElementById('ns');const v=parseInt(e.textContent);if(!isNaN(v)&&v>0)e.textContent=v-1;},1000);

@@ -20,6 +20,8 @@ try:
 except ImportError:
     sys.exit('\nRun:  pip install "nse[local]"  then try again.\n')
 
+import market_hours as mh   # shared weekend/holiday/session-hours check
+
 POLL_SECONDS = 180
 MARKET_START = (9, 30)
 MARKET_END   = (15, 5)
@@ -861,8 +863,8 @@ def save_csv(results, ts):
                         "symbol":r["sym"],**{k:r.get(k,"") for k in _FIELDS[3:]}})
 
 def mkt_open():
-    t = datetime.datetime.now()
-    return MARKET_START <= (t.hour, t.minute) < MARKET_END
+    # trading day (weekday & not an NSE holiday) AND within this scanner's window
+    return mh.mkt_open(start=MARKET_START, end=MARKET_END)
 
 # -- CONCURRENT FETCH ----------------------------------------------------------
 def fetch_one_chain(nse, sym):
@@ -1067,6 +1069,25 @@ def _run_scan_loop(source, chain_src, nse_ctx, wl):
     while True:
             try:
                 t0 = datetime.datetime.now()
+
+                # -- MARKET CLOSED (weekend / NSE holiday / outside hours): DON'T
+                # fetch. Option chains are meaningless when shut and just return
+                # "no data" forever (exactly what happened on the Oct 2 holiday).
+                # Freeze the last state, re-check each minute, resume on its own.
+                if not mkt_open():
+                    reason = mh.reason_text(t0, MARKET_START, MARKET_END)
+                    with _lock:
+                        _state["market_closed"] = True
+                        _state["market_reason"] = reason
+                        _state["next_scan_in"] = 0
+                    if int(t0.timestamp()) % 300 < 2:
+                        print(f"  [{t0:%H:%M:%S}] market closed — {reason} — paused, no fetch")
+                    time.sleep(30)
+                    continue
+                else:
+                    with _lock:
+                        _state["market_closed"] = False
+
                 scan_n = _state["scan_num"] + 1
                 print(f"  [{t0:%H:%M:%S}] Scan #{scan_n} | market data...",
                       end=" ", flush=True)
