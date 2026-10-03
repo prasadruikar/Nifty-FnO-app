@@ -60,13 +60,14 @@ HOUR_CACHE_SEC = 300        # re-use a stock's hourly pull for 5 min (live-ish)
 # live read of writer positioning (the walls that defend S/R), not a line.
 OPTION_CHAIN_URL = "https://api.upstox.com/v2/option/chain"
 OPT_EXPIRY_CACHE = Path("swing_opt_expiry_cache.json")
+OPT_SNAP_FILE    = Path("swing_opt_snapshots.json")   # last good chain per stock (shown when market shut)
 OPT_CACHE_SEC = 900         # re-use a stock's option snapshot for 15 min
 
 # Bump this string every time the ranking logic changes. It is printed at
 # startup AND shown in the UI, so you can VERIFY the new code actually loaded
 # (if the version on screen doesn't match, the .py on disk wasn't replaced -
 # delete __pycache__ and copy the file again).
-SWING_ENGINE_VERSION = "oi-trend-v8  (2026-10-01)"
+SWING_ENGINE_VERSION = "oi-trend-v9  (2026-10-02)"
 
 LOOKBACK_DAYS = 60     # calendar days requested (~40 trading sessions) per fetch
 KEEP_DAYS     = 90     # how much daily history we accumulate/retain on disk
@@ -109,6 +110,12 @@ class SwingEngine:
         self.opt_expiry = {}                   # {SYMBOL: 'YYYY-MM-DD' nearest option expiry}
         self.opt_expiry_day = ""               # date the expiry map was built
         self.opt_cache = {}                    # {SYMBOL: (fetched_ts, snapshot dict)}
+        self.opt_snap = {}                     # {SYMBOL: last GOOD snapshot} - shown when live chain is empty (market shut)
+        try:
+            if OPT_SNAP_FILE.exists():
+                self.opt_snap = json.loads(OPT_SNAP_FILE.read_text()) or {}
+        except Exception:
+            self.opt_snap = {}
         self.last_updated = ""
         self.last_count = 0
         self.version = SWING_ENGINE_VERSION
@@ -311,17 +318,18 @@ class SwingEngine:
         self._ensure_opt_expiry()
         expiry = self.opt_expiry.get(sym)
         if not expiry:
-            return {}
+            return self._opt_fallback(sym, "no F&O expiry resolved for this symbol")
         try:
             r = self.s.get(OPTION_CHAIN_URL,
                            params={"instrument_key": key, "expiry_date": expiry}, timeout=12)
             if r.status_code != 200:
-                return {}
+                return self._opt_fallback(sym, f"option-chain HTTP {r.status_code}")
             rows = r.json().get("data", []) or []
-        except Exception:
-            return {}
+        except Exception as e:
+            return self._opt_fallback(sym, f"chain request failed ({e})")
         if not rows:
-            return {}
+            # live chain empty (market shut / holiday) -> show the last good snapshot
+            return self._opt_fallback(sym, "live chain empty — exchange not publishing (market shut / holiday)")
         spot = 0.0
         strikes = []
         tc = tp = 0
@@ -337,7 +345,7 @@ class SwingEngine:
             if st:
                 strikes.append({"k": st, "coi": coi, "poi": poi})
         if not strikes:
-            return {}
+            return self._opt_fallback(sym, "chain returned no strikes")
         strikes.sort(key=lambda x: x["k"])
         pcr = round(tp / tc, 2) if tc else 0.0
         call_wall = max(strikes, key=lambda x: x["coi"])      # resistance
@@ -353,9 +361,31 @@ class SwingEngine:
             "call_wall": round(call_wall["k"], 1), "call_wall_oi": call_wall["coi"],
             "put_wall": round(put_wall["k"], 1), "put_wall_oi": put_wall["poi"],
             "ladder": ladder, "atm": round(strikes[atm_i]["k"], 1),
+            "stale": False,
+            "as_of": datetime.datetime.now().strftime("%d %b %H:%M"),
         }
         self.opt_cache[sym] = (now, snap)
+        # remember this GOOD snapshot so it can still be shown when the live chain
+        # is empty (weekend / holiday / after-hours)
+        self.opt_snap[sym] = snap
+        try:
+            OPT_SNAP_FILE.write_text(json.dumps(self.opt_snap))
+        except Exception:
+            pass
         return snap
+
+    def _opt_fallback(self, sym, reason=""):
+        """Live chain unavailable (market shut / holiday / no expiry). Return the
+        last GOOD snapshot for this stock, flagged stale, so the walls still show
+        for review instead of a blank. If we never captured one, return the exact
+        reason so the UI can say precisely why instead of a vague 'no chain'."""
+        snap = self.opt_snap.get(sym)
+        if snap:
+            out = dict(snap)
+            out["stale"] = True
+            out["reason"] = reason
+            return out
+        return {"sym": sym, "error": reason or "options unavailable", "stale": True}
 
     # ---------------- the analysis (the institutional read) ----------------
     def analyze(self, sym, daily):

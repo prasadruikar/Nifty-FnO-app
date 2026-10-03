@@ -510,36 +510,62 @@ def swing_loop():
     if _swing is None:
         return
     time.sleep(8)   # let the main feed settle first
-    did_eod_refresh = False   # have we captured the closing day's setups yet?
+    # publish the engine version straight away so the UI shows it even before the
+    # first live compute (and when frozen off-hours)
+    with _lock:
+        _state["swing_ver"] = getattr(_swing, "version", "")
+    did_cold_populate = False
     while True:
         try:
-            open_now = mkt_open()
-            have_data = bool(_state["swing"])
-            # Refresh when: market is open (live), OR we've never populated,
-            # OR it's the first pass after the close (one end-of-day snapshot
-            # so the final day's story is captured). Otherwise - market shut and
-            # EOD already taken - we DON'T fetch: the swing review stays frozen.
-            if open_now or not have_data or not did_eod_refresh:
-                # At the close / on a restart while shut, FORCE a fresh pull of the
-                # last days' daily candles so the day-end ranking uses finalised
-                # data (this is when the analysis actually gets done). During live
-                # market the same-day cache is fine, so don't force then.
-                setups = _swing.refresh(force=not open_now)
+            if mkt_open():
+                # LIVE market only: re-pull daily candles every hour (force=True)
+                # so TODAY's forming OI actually updates each hour - without force,
+                # refresh() skips the same-day re-fetch and OI would sit frozen at
+                # the morning's value all session. This loop runs hourly (see the
+                # SWING_REFRESH_SEC sleep below), so it's one fetch/stock/hour.
+                setups = _swing.refresh(force=True)
                 oirise = _swing.oi_rising(5)   # pure 5-day OI-growth ranking (price ignored)
                 with _lock:
                     _state["swing"] = setups[:60]
                     _state["swing_oi"] = oirise[:60]
                     _state["swing_updated"] = _swing.last_updated
                     _state["swing_ver"] = getattr(_swing, "version", "")
-                tag = "live" if open_now else "end-of-day (frozen after this)"
                 print(f"  [swing] {getattr(_swing,'version','?')} · {len(setups)} setups · "
-                      f"{len(oirise)} OI-rising @ {_swing.last_updated}  [{tag}]")
-                did_eod_refresh = not open_now   # once closed+refreshed, stop
-            if open_now:
-                did_eod_refresh = False          # reset so next close triggers one EOD pass
+                      f"{len(oirise)} OI-rising @ {_swing.last_updated}  [live]")
+            else:
+                # MARKET CLOSED (after-hours / weekend / holiday): DO NOT fetch or
+                # recompute. Keep the last live session's ranking EXACTLY as it is
+                # (restored from disk on a restart). This is why the list stays
+                # identical to yesterday on a holiday instead of changing.
+                # For a fresh end-of-day analysis on finalised data, run the
+                # standalone  oi_rank.py  by hand.
+                #
+                # ONE exception: if there's genuinely nothing to show (cold start
+                # with no saved snapshot), populate ONCE from the CACHED daily data
+                # - no API call, no fetch - so the screen isn't blank. Uses the same
+                # cached candles, so it reproduces the last session's ranking.
+                with _lock:
+                    is_empty = not _state.get("swing_oi") and not _state.get("swing")
+                if is_empty and not did_cold_populate and _swing.daily:
+                    try:
+                        oirise = _swing.oi_rising(5)
+                        setups = [a for a in (_swing.analyze(s, _swing.daily.get(s))
+                                              for s in _swing.fut_keys) if a]
+                        setups.sort(key=lambda x: x["score"], reverse=True)
+                        with _lock:
+                            _state["swing"] = setups[:60]
+                            _state["swing_oi"] = oirise[:60]
+                            _state["swing_updated"] = (_swing.last_updated or
+                                                       datetime.datetime.now().strftime("%H:%M"))
+                            _state["swing_ver"] = getattr(_swing, "version", "")
+                        print(f"  [swing] cold-populate from cache (frozen): "
+                              f"{len(oirise)} OI-rising, {len(setups)} setups")
+                    except Exception as e:
+                        print(f"  [swing] cold-populate error: {e}")
+                    did_cold_populate = True
         except Exception as e:
             print(f"  [swing] refresh error: {e}")
-        # poll more often while shut (cheap - it mostly just re-checks the clock)
+        # while shut, just re-check the clock occasionally (no work done)
         time.sleep(SWING_REFRESH_SEC if mkt_open() else 300)
 
 

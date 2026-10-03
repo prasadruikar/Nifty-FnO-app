@@ -247,7 +247,7 @@ footer{text-align:center;padding:18px;color:var(--text3);font-size:11px;border-t
         style="flex:1;min-width:260px;font-size:12px;padding:9px 12px;border-radius:9px;background:var(--bg2);border:1px solid var(--border);color:var(--text1)">
       <datalist id="swing-syms"></datalist>
       <div id="swing-updated" style="font-size:10px;color:var(--text3)"></div>
-      <div id="swing-build" style="font-size:9.5px;color:var(--text3);font-family:monospace;opacity:.8" title="If the engine version is blank or old, your swing_engine.py didn't get replaced — delete __pycache__ and copy it again.">UI build oi-trend-v8 · engine —</div>
+      <div id="swing-build" style="font-size:9.5px;color:var(--text3);font-family:monospace;opacity:.8" title="If the engine version is blank or old, your swing_engine.py didn't get replaced — delete __pycache__ and copy it again.">UI build oi-trend-v9 · engine —</div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
       <span class="sgsub">rank by</span>
@@ -1101,7 +1101,12 @@ function swingRenderOptions(sym,host){
     return;
   }
   if(o===null){ host.innerHTML='<div style="font-size:11px;color:var(--text3);padding:10px">Loading live option chain…</div>'; return; }
-  if(!o || !o.ladder || !o.ladder.length){ host.innerHTML='<div style="font-size:11px;color:var(--text3);padding:10px">Live options unavailable for this stock (no chain / expiry).</div>'; return; }
+  if(!o || !o.ladder || !o.ladder.length){
+    const why=(o&&o.error)?o.error:'live chain not available';
+    host.innerHTML='<div style="font-size:11px;color:var(--text3);padding:10px;line-height:1.6">Option walls come from the <b>live</b> exchange chain — <span style="color:var(--amber)">'+why+'</span>.<br>The walls are saved automatically the first time you open this stock on a <b>trading day</b>; after that they show here even when the market is shut. No saved snapshot for this stock yet.</div>';
+    return;
+  }
+  const staleBadge=o.stale?`<span style="font-size:9.5px;font-weight:700;color:#e8c766;background:#2a2410;border:1px solid #5c4a16;border-radius:5px;padding:2px 7px;margin-left:6px" title="Market is closed — showing the last live option chain captured${o.as_of?' at '+o.as_of:''}">last snapshot${o.as_of?' · '+o.as_of:''}</span>`:'';
   const lad=o.ladder, maxOI=Math.max(1,...lad.map(x=>Math.max(x.coi,x.poi)));
   const W=560,H=200,padL=10,padR=10,padT=28,padB=30, plotW=W-padL-padR, plotH=H-padT-padB, base=padT+plotH;
   const m=lad.length, slot=plotW/m, bw=Math.min(13,slot*0.36);
@@ -1132,7 +1137,7 @@ function swingRenderOptions(sym,host){
       <span style="color:var(--text3)">PCR <b style="color:${pcrCol}">${o.pcr}</b></span>
       <span style="color:var(--text3)">Put wall (support) <b style="color:var(--green)">${fmt(o.put_wall)}</b></span>
       <span style="color:var(--text3)">Call wall (resistance) <b style="color:var(--red)">${fmt(o.call_wall)}</b></span>
-      <span style="color:var(--text3)">exp ${o.expiry}</span>
+      <span style="color:var(--text3)">exp ${o.expiry}</span>${staleBadge}
     </div>
     ${svg}
     <div style="font-size:10.5px;color:var(--text2);margin-top:6px;line-height:1.5">${read} <span style="color:var(--text3)">If your chart's S/R lines up with a wall, that's confluence — writers are defending it.</span></div>`;
@@ -1311,7 +1316,7 @@ async function update(){
   _safe(()=>renderHeatmap(d.sector_perf, d.treemap),'heatmap');
   _safe(()=>{_swingOiList=d.swing_oi||[];
     const sb=document.getElementById('swing-build');
-    if(sb) sb.innerHTML='UI build oi-trend-v8 · engine '+(d.swing_ver?('<b style="color:var(--green)">'+d.swing_ver+'</b>'):'<b style="color:var(--amber)">— (old .py still loaded)</b>');
+    if(sb) sb.innerHTML='UI build oi-trend-v9 · engine '+(d.swing_ver?('<b style="color:var(--green)">'+d.swing_ver+'</b>'):'<b style="color:var(--amber)">— (old .py still loaded)</b>');
     renderSwing(d.swing, d.swing_updated);},'swing');
   _safe(()=>{ if(d.universe&&d.universe.length){ _swingUniverse=d.universe;
     const dl=document.getElementById('swing-syms');
