@@ -61,7 +61,9 @@ SWING_REFRESH_SEC = 3600   # swing setups use DAILY data - refresh hourly
 
 _state = {
     "session": [], "session_all": [], "sector_perf": [], "treemap": [], "sharp": [], "nifty_view": None, "nifty_signal": None, "nifty_chart": [], "trades": [], "building": [], "running": [], "ranked": [], "at_level": [], "setups": [],
-    "swing": [], "swing_oi": [], "swing_updated": "", "swing_ver": "", "universe": [],
+    "swing": [], "swing_oi": [], "swing_spike": [], "swing_updated": "", "swing_ver": "", "universe": [],
+    "highprob": [],   # (legacy) OI-built zone retest
+    "fut_spikes": [], # live futures OI+Volume spike over rolling windows (not persisted - ephemeral)
     "conviction_updated": "", "nifty_bias": "", "bridge_alive": False,
     "scan_num": 0, "scan_time": "--:--:--",
     "next_scan_in": 0, "total": 0, "source": config.DATA_SOURCE,
@@ -89,8 +91,12 @@ _stock_fut = None             # StockFutures fetcher (set up in main when token 
 _stock_fut_cache = [{}]       # last fetched {SYMBOL: fut_score_dict} (throttled)
 _stock_fut_last = [0.0]       # timestamp of last stock-futures fetch
 _swing = None                 # SwingEngine (daily multi-day setups), set in main
+_nifty_oi = None              # NiftyOI (on-demand NIFTY futures-OI chart + walls), set in main
+_highprob_zones = [{}]        # {SYM: zone} OI-built price zones, computed once/day (stable)
+_highprob_day = [""]          # date the zones were computed for
 _last_flow = {}              # {sym: latest flow signal} - for search lookup
 _UI_FILE = Path(__file__).parent / "orderflow_ui.html"
+_NIFTY_UI_FILE = Path(__file__).parent / "nifty_oi.html"
 
 # Snapshot of the display state, written every scan so a restart (or just
 # opening the app after the close) shows the LAST live picture frozen, instead
@@ -102,7 +108,7 @@ _PERSIST_KEYS = [
     "nifty_view", "nifty_signal", "nifty_chart", "trades", "building",
     "running", "ranked", "at_level", "setups",
     "conviction_updated", "nifty_bias", "scan_time", "total",
-    "swing", "swing_oi", "swing_updated", "swing_ver",
+    "swing", "swing_oi", "swing_spike", "swing_updated", "swing_ver", "highprob",
 ]
 
 
@@ -337,6 +343,36 @@ def scanner_main(feed):
             session_ranked = _session.update(sess_flows, conv_map, _stock_fut_cache[0])
             _session.save()
 
+            # === FUTURES OI + VOLUME SPIKE (live, rolling windows) =============
+            # For every stock we buffer intraday OI+volume (in stock_futures) and
+            # report OI% change + volume + rel-vol over rolling 15m/30m/1h/2h/3h
+            # windows. The UI picks the metric (OI / Volume / both) and the window.
+            try:
+                if _stock_fut is not None:
+                    # per-stock avg DAILY futures volume (baseline for rel-vol),
+                    # from the swing engine's daily candles
+                    avgv = {}
+                    if _swing is not None:
+                        for s2, dd in _swing.daily.items():
+                            vs = [x.get("v", 0) for x in dd[-10:] if x.get("v")]
+                            if vs:
+                                avgv[s2] = sum(vs) / len(vs)
+                    sp = _stock_fut.spike_windows(avgv)
+                    rows = []
+                    for s2, info in sp.items():
+                        f = sess_flows.get(s2)
+                        rows.append({
+                            "sym": s2, "ltp": info["ltp"],
+                            "turn_cr": info.get("turn_cr", 0),   # avg daily turnover (cr) - liquidity
+                            "liq": info.get("liq", False),       # passes the liquidity floor
+                            "day_chg": round(float((f or {}).get("day_chg", 0) or 0), 2),
+                            "w": info["windows"],
+                        })
+                    with _lock:
+                        _state["fut_spikes"] = rows
+            except Exception as _e:
+                print(f"  [fut-spike] error: {_e}")
+
             # === SECTOR HEATMAP + F&O TREEMAP (throttled ~30s) ==============
             try:
                 now_sec = time.time()
@@ -525,13 +561,25 @@ def swing_loop():
                 # SWING_REFRESH_SEC sleep below), so it's one fetch/stock/hour.
                 setups = _swing.refresh(force=True)
                 oirise = _swing.oi_rising(5)   # pure 5-day OI-growth ranking (price ignored)
+                spike = _swing.oi_spike(35)    # single-day OI jump > 35%
                 with _lock:
                     _state["swing"] = setups[:60]
                     _state["swing_oi"] = oirise[:60]
+                    _state["swing_spike"] = spike[:60]
                     _state["swing_updated"] = _swing.last_updated
                     _state["swing_ver"] = getattr(_swing, "version", "")
                 print(f"  [swing] {getattr(_swing,'version','?')} · {len(setups)} setups · "
-                      f"{len(oirise)} OI-rising @ {_swing.last_updated}  [live]")
+                      f"{len(oirise)} OI-rising · {len(spike)} OI-spike @ {_swing.last_updated}  [live]")
+                # HIGH-PROB ZONES: compute ONCE per day (stable, from completed
+                # sessions). The scanner's fast loop then checks live price vs these.
+                today_hp = datetime.date.today().isoformat()
+                if _highprob_day[0] != today_hp or not _highprob_zones[0]:
+                    try:
+                        _highprob_zones[0] = _swing.highprob_zones()
+                        _highprob_day[0] = today_hp
+                        print(f"  [highprob] zones computed for {len(_highprob_zones[0])} stocks")
+                    except Exception as e:
+                        print(f"  [highprob] zone compute error: {e}")
             else:
                 # MARKET CLOSED (after-hours / weekend / holiday): DO NOT fetch or
                 # recompute. Keep the last live session's ranking EXACTLY as it is
@@ -549,12 +597,14 @@ def swing_loop():
                 if is_empty and not did_cold_populate and _swing.daily:
                     try:
                         oirise = _swing.oi_rising(5)
+                        spike = _swing.oi_spike(35)
                         setups = [a for a in (_swing.analyze(s, _swing.daily.get(s))
                                               for s in _swing.fut_keys) if a]
                         setups.sort(key=lambda x: x["score"], reverse=True)
                         with _lock:
                             _state["swing"] = setups[:60]
                             _state["swing_oi"] = oirise[:60]
+                            _state["swing_spike"] = spike[:60]
                             _state["swing_updated"] = (_swing.last_updated or
                                                        datetime.datetime.now().strftime("%H:%M"))
                             _state["swing_ver"] = getattr(_swing, "version", "")
@@ -654,6 +704,43 @@ class Handler(BaseHTTPRequestHandler):
                 sym = parse_qs(urlparse(self.path).query).get("sym", [""])[0].upper()
             lvls = _levels.levels_for(sym) if sym else []
             self._json(json.dumps({"sym": sym, "levels": lvls}))
+        elif self.path.startswith("/niftyoi"):
+            # /niftyoi?tf=15m&rng=5  -> NIFTY future OI/price candles + option S/R
+            # walls. ON DEMAND ONLY - computed when the NIFTY OI page asks, never
+            # in the background. Range is clamped to 5 sessions while the market is
+            # live; up to ~22 (a month) when it's shut (drag-back review).
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            tf = (q.get("tf", ["15m"])[0] or "15m").lower()
+            try:
+                rng = int(q.get("rng", ["5"])[0])
+            except Exception:
+                rng = 5
+            open_now = mkt_open()
+            rng = min(rng, 5) if open_now else min(max(rng, 5), 22)
+            out = {"tf": tf, "market_open": open_now, "max_range": 5 if open_now else 22}
+            try:
+                if _nifty_oi is not None:
+                    out.update(_nifty_oi.candles(tf, rng))
+                    out["levels"] = _nifty_oi.levels()
+                else:
+                    out["error"] = "NIFTY OI engine not initialised"
+            except Exception as e:
+                out["error"] = f"{e}"
+                print(f"  [niftyoi] error: {e}")
+            self._json(_safe_json(out))
+        elif self.path.startswith("/nifty"):
+            # the standalone NIFTY OI chart page (visiting it is what triggers the
+            # first fetch - nothing loads until you open it)
+            try:
+                html = _NIFTY_UI_FILE.read_bytes()
+            except FileNotFoundError:
+                html = b"<h1>nifty_oi.html not found next to the script</h1>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.end_headers()
+            self.wfile.write(html)
         else:
             try:
                 html = _UI_FILE.read_bytes()
@@ -762,6 +849,15 @@ def main():
     except Exception as e:
         print(f"  Swing setups: DISABLED - SwingEngine() failed to init: {e}")
         _swing = None
+    # NIFTY OI chart engine - on-demand only (fetches when the /nifty page asks)
+    global _nifty_oi
+    try:
+        import nifty_oi as nifty_oi_mod
+        _nifty_oi = nifty_oi_mod.NiftyOI(token)
+        print("  NIFTY OI page: ready  (/nifty - 15m/1h futures OI + option walls)")
+    except Exception as e:
+        print(f"  NIFTY OI page: DISABLED - NiftyOI() failed to init: {e}")
+        _nifty_oi = None
     global _sectors
     try:
         _sectors = sectors_mod.Sectors(token)

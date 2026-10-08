@@ -1,0 +1,204 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NIFTY Futures OI</title>
+<style>
+  :root{--bg:#0b0e13;--bg2:#11151d;--bg3:#1a2029;--border:#1e2630;--text1:#E8EAF0;--text2:#aab2c0;--text3:#6a7486;
+        --teal:#2DD4BF;--amber:#F5A623;--green:#10D98C;--red:#F04E6E;}
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--text2);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;padding:16px}
+  .hdr{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+  .title{font-size:17px;font-weight:800;color:var(--text1)}
+  .title .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--teal);margin-right:7px;vertical-align:middle}
+  .grp{display:flex;gap:4px;align-items:center;background:var(--bg2);border:1px solid var(--border);border-radius:9px;padding:4px}
+  .grp .lbl{font-size:10px;color:var(--text3);padding:0 6px;text-transform:uppercase;letter-spacing:.4px}
+  .btn{font-size:12px;font-weight:700;color:var(--text3);background:transparent;border:none;border-radius:6px;padding:6px 11px;cursor:pointer}
+  .btn.on{background:var(--bg3);color:var(--text1)}
+  .btn:disabled{opacity:.35;cursor:not-allowed}
+  .status{margin-left:auto;font-size:11px;color:var(--text3)}
+  .pill{font-size:10.5px;font-weight:700;border-radius:20px;padding:3px 10px}
+  .pill.open{background:rgba(16,217,140,.14);color:var(--green)}
+  .pill.shut{background:#2a2410;color:#e8c766;border:1px solid #5c4a16}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+  .legend{font-size:11.5px;margin-bottom:8px}
+  .legend b{font-weight:800}
+  .scroll{overflow-x:auto;overflow-y:hidden;position:relative}
+  .plot{position:relative}
+  .xh{position:absolute;top:0;width:1px;background:#8893a6;display:none;pointer-events:none}
+  .xhh{position:absolute;left:0;height:1px;background:#8893a6;display:none;pointer-events:none}
+  .chip{position:absolute;background:rgba(28,34,48,.96);border:1px solid var(--border);border-radius:5px;padding:3px 8px;font-size:10.5px;white-space:nowrap;display:none;pointer-events:none;z-index:5}
+  .lvl{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:11px}
+  .lvl .tag{border-radius:6px;padding:3px 9px;font-weight:700}
+  .lvl .r{background:rgba(240,78,110,.13);color:var(--red)}
+  .lvl .s{background:rgba(16,217,140,.13);color:var(--green)}
+  .hint{font-size:10.5px;color:var(--text3);margin-top:8px;line-height:1.5}
+  a.back{color:var(--text3);font-size:12px;text-decoration:none}
+  a.back:hover{color:var(--text1)}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <div class="title"><span class="dot"></span>NIFTY Futures OI</div>
+  <div class="grp"><span class="lbl">TF</span>
+    <button class="btn on" id="tf-15m" onclick="setTf('15m')">15m</button>
+    <button class="btn" id="tf-1h" onclick="setTf('1h')">1h</button>
+    <button class="btn" id="tf-4h" onclick="setTf('4h')">4h</button>
+    <button class="btn" id="tf-1d" onclick="setTf('1d')">1D</button>
+  </div>
+  <div class="grp"><span class="lbl">Sessions</span>
+    <button class="btn on" id="rg-5" onclick="setRng(5)">5</button>
+    <button class="btn" id="rg-10" onclick="setRng(10)">10</button>
+    <button class="btn" id="rg-22" onclick="setRng(22)">22 (1M)</button>
+  </div>
+  <div class="status"><span id="mkt" class="pill shut">—</span> <span id="upd"></span></div>
+</div>
+
+<div class="card">
+  <div class="legend" id="legend">Loading NIFTY futures OI…</div>
+  <div class="scroll" id="scroll"><div class="plot" id="plot"></div></div>
+  <div class="lvl" id="levels"></div>
+  <div class="hint" id="hint"></div>
+</div>
+<a class="back" href="/">← back to cockpit</a>
+
+<script>
+var TF='15m', RNG=5, DATA=null, LVL=null, MKTOPEN=false, timer=null;
+function fmtOI(v){v=+v;if(!isFinite(v))return'--';var a=Math.abs(v);if(a>=1e7)return(v/1e7).toFixed(2)+'Cr';if(a>=1e5)return(v/1e5).toFixed(2)+'L';if(a>=1e3)return(v/1e3).toFixed(1)+'k';return Math.round(v);}
+function setTf(t){TF=t;['15m','1h','4h','1d'].forEach(function(x){document.getElementById('tf-'+x).classList.toggle('on',x===t);});load();}
+function setRng(r){RNG=r;['5','10','22'].forEach(function(x){document.getElementById('rg-'+x).classList.toggle('on',+x===r);});load();}
+function applyRangeLock(){
+  // live market: only 5 sessions allowed. closed: 5/10/22 (drag back up to a month)
+  var lock=MKTOPEN;
+  document.getElementById('rg-10').disabled=lock;
+  document.getElementById('rg-22').disabled=lock;
+  if(lock && RNG!==5){RNG=5;['5','10','22'].forEach(function(x){document.getElementById('rg-'+x).classList.toggle('on',+x===5);});}
+}
+function load(){
+  fetch('/niftyoi?tf='+TF+'&rng='+RNG).then(function(r){return r.json();}).then(function(j){
+    DATA=j; LVL=j.levels||null; MKTOPEN=!!j.market_open;
+    document.getElementById('mkt').className='pill '+(MKTOPEN?'open':'shut');
+    document.getElementById('mkt').textContent=MKTOPEN?'LIVE':'CLOSED';
+    document.getElementById('upd').textContent=j.updated?('updated '+j.updated):'';
+    applyRangeLock();
+    render();
+    // live feed: keep polling while market open; when closed, fetch once.
+    if(timer){clearTimeout(timer);timer=null;}
+    if(MKTOPEN){timer=setTimeout(load,30000);}  // 30s live refresh
+  }).catch(function(e){
+    document.getElementById('legend').innerHTML='<span style="color:var(--red)">Failed to load — is the cockpit running? ('+e+')</span>';
+  });
+}
+function render(){
+  var pts=(DATA&&DATA.points)||[];
+  var legend=document.getElementById('legend');
+  if(!pts.length){
+    legend.innerHTML='<span style="color:var(--text3)">No NIFTY futures candles'+(DATA&&DATA.error?(' — '+DATA.error):'')+'. '+(MKTOPEN?'':'Market shut — if nothing was captured, open during a session once.')+'</span>';
+    document.getElementById('plot').innerHTML=''; document.getElementById('levels').innerHTML=''; document.getElementById('hint').textContent='';
+    return;
+  }
+  var n=pts.length;
+  var ois=pts.map(function(p){return p.oi;}), prices=pts.map(function(p){return p.c;});
+  var oiMx=Math.max.apply(null,ois), oiMn=Math.min.apply(null,ois);
+  var pMx=Math.max.apply(null,prices), pMn=Math.min.apply(null,prices);
+  // include visible S/R levels in the price axis so the lines are on-screen
+  var sup=(LVL&&LVL.support)||[], res=(LVL&&LVL.resistance)||[];
+  var band=(pMx-pMn)||1;
+  [].concat(sup,res).forEach(function(l){
+    if(l.price>=pMn-band*0.6 && l.price<=pMx+band*0.6){pMx=Math.max(pMx,l.price);pMn=Math.min(pMn,l.price);}
+  });
+  var oiRg=(oiMx-oiMn)||1, pRg=(pMx-pMn)||1;
+  // width scales with point count -> wide chart scrolls horizontally (drag-back).
+  // HTFs get more spacing per bar so they aren't cramped.
+  var pxPer={'15m':13,'1h':20,'4h':34,'1d':48}[TF]||14;
+  var W=Math.max(880, n*pxPer), H=360, padL=8, padR=70, padT=18, padB=26;
+  var plotW=W-padL-padR, plotH=H-padT-padB;
+  var X=function(i){return padL+(n<=1?0:i/(n-1)*plotW);};
+  var Yoi=function(v){return padT+(1-(v-oiMn)/oiRg)*plotH;};
+  var Yp=function(v){return padT+(1-(v-pMn)/pRg)*plotH;};
+  // session-break lines + date labels
+  var days=[]; pts.forEach(function(p){if(days.indexOf(p.d)<0)days.push(p.d);});
+  var gap=n>1?plotW/(n-1):0, breaks='', xlab='', segWm='';
+  days.forEach(function(day){
+    var idx=[]; pts.forEach(function(p,i){if(p.d===day)idx.push(i);});
+    var f=idx[0], l=idx[idx.length-1];
+    if(f>0){var bx=(X(f)-gap/2).toFixed(1);breaks+='<line x1="'+bx+'" y1="'+padT+'" x2="'+bx+'" y2="'+(padT+plotH)+'" stroke="#2a3140" stroke-width="1" stroke-dasharray="2 4"/>';}
+    xlab+='<text x="'+((X(f)+X(l))/2).toFixed(1)+'" y="'+(H-7)+'" fill="#6a7486" font-size="9.5" text-anchor="middle">'+day+'</text>';
+    // per-session FUTURES OI change % — faint watermark behind the lines
+    var o0=ois[f], o1=ois[l], dpct=o0?((o1-o0)/o0*100):0;
+    var segL=(f>0?X(f)-gap/2:padL), segR=(l<n-1?X(l)+gap/2:(W-padR));
+    var cx=((segL+segR)/2).toFixed(1), bw=segR-segL;
+    var roll=dpct>120;   // contract rollover, not real buildup
+    var col=roll?'rgba(230,179,77,0.5)':(dpct>0.05?'rgba(45,212,191,0.40)':(dpct<-0.05?'rgba(240,78,110,0.38)':'rgba(160,170,185,0.22)'));
+    var fs=Math.max(11,Math.min(20,bw*0.16)).toFixed(0);
+    var lbl=roll?'↻roll':((dpct>=0?'+':'')+dpct.toFixed(1)+'%');
+    var tip=roll?(day+' contract rollover (OI jump '+dpct.toFixed(0)+'% — not fresh buildup)'):(day+' futures OI '+(dpct>=0?'+':'')+dpct.toFixed(2)+'%');
+    segWm+='<text x="'+cx+'" y="'+(padT+plotH*0.52).toFixed(1)+'" fill="'+col+'" font-size="'+fs+'" font-weight="800" text-anchor="middle"><title>'+tip+'</title>'+lbl+'</text>';
+  });
+  // RIGHT-SIDE PRICE AXIS — faint gridlines + price labels, so the option-wall
+  // lines (which map to this price scale) read against real numbers.
+  var axis='';
+  for(var g=0;g<=4;g++){
+    var pv=pMn+(g/4)*pRg, ay=Yp(pv).toFixed(1);
+    axis+='<line x1="'+padL+'" y1="'+ay+'" x2="'+(W-padR)+'" y2="'+ay+'" stroke="#141a22" stroke-width="1"/>'+
+          '<text x="'+(W-padR+5)+'" y="'+(+ay+3)+'" fill="#5a6472" font-size="9">'+Math.round(pv)+'</text>';
+  }
+  // OI line (teal) + price line (amber)
+  var oiLine='',pLine='';
+  ois.forEach(function(v,i){oiLine+=(i?'L':'M')+X(i).toFixed(1)+' '+Yoi(v).toFixed(1)+' ';});
+  prices.forEach(function(v,i){pLine+=(i?'L':'M')+X(i).toFixed(1)+' '+Yp(v).toFixed(1)+' ';});
+  // S/R horizontal lines on the PRICE axis
+  var lvlLines='';
+  res.forEach(function(l){ if(l.price<pMn-0.001||l.price>pMx+0.001)return; var y=Yp(l.price).toFixed(1);
+    lvlLines+='<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="var(--red)" stroke-width="1" stroke-dasharray="5 4" opacity="0.6"/>'+
+             '<text x="'+(W-padR+3)+'" y="'+(+y+3)+'" fill="var(--red)" font-size="9.5" font-weight="700">R '+l.price+'</text>';});
+  sup.forEach(function(l){ if(l.price<pMn-0.001||l.price>pMx+0.001)return; var y=Yp(l.price).toFixed(1);
+    lvlLines+='<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="var(--green)" stroke-width="1" stroke-dasharray="5 4" opacity="0.6"/>'+
+             '<text x="'+(W-padR+3)+'" y="'+(+y+3)+'" fill="var(--green)" font-size="9.5" font-weight="700">S '+l.price+'</text>';});
+  var svg='<svg width="'+W+'" height="'+H+'" style="display:block">'+axis+breaks+segWm+lvlLines+
+    '<path d="'+oiLine+'" fill="none" stroke="var(--teal)" stroke-width="1.5" stroke-linejoin="round"/>'+
+    '<path d="'+pLine+'" fill="none" stroke="var(--amber)" stroke-width="1.5" stroke-linejoin="round"/>'+
+    xlab+'</svg>';
+  var plot=document.getElementById('plot');
+  plot.style.width=W+'px';
+  plot.innerHTML=svg+'<div class="xh" id="xh"></div><div class="xhh" id="xhh"></div><div class="chip" id="chip"></div>';
+  // legend
+  var oiUp=ois[n-1]>=ois[0], pUp=prices[n-1]>=prices[0];
+  legend.innerHTML='<b style="color:var(--teal)">● OI '+fmtOI(ois[n-1])+' '+(oiUp?'▲':'▼')+'</b>&nbsp;&nbsp;'+
+    '<b style="color:var(--amber)">● Price '+prices[n-1]+' '+(pUp?'▲':'▼')+'</b>'+
+    '<span style="color:var(--text3)">&nbsp;·&nbsp;'+TF+' · '+days.length+' session'+(days.length>1?'s':'')+' · '+n+' bars'+(MKTOPEN?' · live':'')+'</span>';
+  // levels list under chart
+  var lv=document.getElementById('levels'); var parts=[];
+  if(LVL&&LVL.stale) parts.push('<span class="tag" style="background:#2a2410;color:#e8c766;border:1px solid #5c4a16">walls: last snapshot</span>');
+  res.forEach(function(l){parts.push('<span class="tag r">R '+l.price+' · '+fmtOI(l.oi)+' call OI</span>');});
+  sup.forEach(function(l){parts.push('<span class="tag s">S '+l.price+' · '+fmtOI(l.oi)+' put OI</span>');});
+  lv.innerHTML=parts.join('');
+  document.getElementById('hint').textContent=MKTOPEN
+    ? 'Live — OI line (teal) vs NIFTY future price (amber). Red = call-OI resistance, green = put-OI support. Refreshing every 30s. Range locked to 5 sessions while live.'
+    : 'Market closed — showing the last session\'s data. Pick 10 or 22 (1M) and scroll the chart left to drag back through history.';
+  wireCrosshair(pts,X,W,H,padT,plotH);
+}
+function wireCrosshair(pts,X,W,H,padT,plotH){
+  var plot=document.getElementById('plot'), xh=document.getElementById('xh'), xhh=document.getElementById('xhh'), chip=document.getElementById('chip');
+  if(!plot)return;
+  xh.style.height=(plotH/H*100)+'%'; xh.style.top=(padT/H*100)+'%';
+  var xs=pts.map(function(p,i){return X(i);});
+  plot.onmousemove=function(e){
+    var r=plot.getBoundingClientRect(); if(!r.width)return;
+    var vbx=(e.clientX-r.left)/r.width*W;
+    var bi=0,bd=1e9; for(var i=0;i<xs.length;i++){var dd=Math.abs(xs[i]-vbx);if(dd<bd){bd=dd;bi=i;}}
+    var left=(xs[bi]/W*100).toFixed(2)+'%'; var p=pts[bi];
+    xh.style.left=left; xh.style.display='block';
+    var my=Math.max(0,Math.min(r.height,e.clientY-r.top));
+    xhh.style.top=my+'px'; xhh.style.display='block'; xhh.style.width=W+'px';
+    chip.style.left=left; chip.style.top='0px';
+    chip.innerHTML='<b>'+p.d+' '+p.hh+'</b>&nbsp; <span style="color:var(--teal)">OI '+fmtOI(p.oi)+'</span>&nbsp; <span style="color:var(--amber)">'+p.c+'</span>';
+    chip.style.display='block';
+  };
+  plot.onmouseleave=function(){xh.style.display='none';xhh.style.display='none';chip.style.display='none';};
+}
+load();
+</script>
+</body>
+</html>

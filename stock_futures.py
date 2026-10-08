@@ -43,6 +43,12 @@ QUOTES_URL = "https://api.upstox.com/v2/market-quote/quotes"
 CACHE_FILE = Path("stock_futures_cache.json")
 CACHE_MAX_AGE = 20 * 3600   # refresh once/day like instruments.py
 
+# LIQUIDITY FLOOR (small-stock fix): a stock whose AVERAGE DAILY futures
+# turnover (avg_vol * price, in crore) is below this is illiquid F&O junk and
+# never qualifies for the OI+Volume spike list, however big its rel-vol looks.
+# Turnover is in rupees so it's size-fair across a Rs200 and a Rs3000 stock.
+MIN_TURN_CR = 50.0          # ~Rs50 cr/day average futures turnover
+
 
 def _norm(x):
     """Strip everything but A-Z0-9 and uppercase, so 'RELIANCE 24 OCT FUT',
@@ -86,9 +92,80 @@ class StockFutures:
         self.avg_oi_incr = {}     # {SYMBOL: rolling avg per-interval |OI change|}
         self.day_open_oi = {}     # {SYMBOL: first OI seen TODAY} - for the day/session OI-change watermark
         self.day = datetime.date.today().isoformat()
+        # rolling intraday history for the live OI+Volume spike windows:
+        # {SYMBOL: [(ts, oi, vol_cumulative, price), ...]} kept ~3.3h
+        self.history = {}
         self.last_matched = 0     # diagnostics: how many symbols got a real quote last refresh()
         self.last_total = 0
         self._resolve_keys()
+
+    # ---- rolling intraday OI+Volume spike windows (15m/30m/1h/2h/3h) --------
+    def spike_windows(self, avg_vol_map=None, windows_min=(15, 30, 60, 120, 180)):
+        """For every stock with intraday history, compute the futures OI change %
+        and the volume traded over each rolling window ending NOW. Volume is
+        cumulative intraday, so window volume = vol_now - vol_(now-window).
+
+        SMALL-STOCK FIX:
+          Absolute share volume is meaningless across stocks of different size,
+          so we NEVER rank on it. Two liquidity guards make small/thin names fair:
+            1. rel  = actual per-minute PACE vs the stock's OWN normal pace. This
+               is size-neutral (a stock vs itself), so a large-cap at 2x normal
+               outranks a micro-cap sitting at normal.
+            2. TURNOVER in rupees, not share count, compares fairly across a Rs200
+               and a Rs3000 stock:
+                 - turn_cr   = avg DAILY futures turnover (avgv * price) in crore.
+                   Stocks below MIN_TURN_CR are illiquid F&O junk -> liq=False so
+                   the UI can hide them entirely.
+                 - wturn_cr  = turnover in THIS window (vol_win * price) in crore.
+                   Even a liquid name must move real money in the window, so a
+                   freak few-lot minute can't rank. Exposed for a UI floor.
+        Returns {SYM: {ltp, turn_cr, liq, windows:{win: {..., wturn_cr}}}}."""
+        avg_vol_map = avg_vol_map or {}
+        now = time.time()
+        out = {}
+        for sym, hist in self.history.items():
+            if not hist or len(hist) < 2:
+                continue
+            ts_cur, oi_cur, vol_cur, price = hist[-1]
+            avgv = avg_vol_map.get(sym, 0) or 0
+            px = float(price or 0)
+            # avg DAILY futures turnover in crore (rupee liquidity, size-fair)
+            turn_cr = round((avgv * px) / 1e7, 2) if (avgv and px) else 0.0
+            liq = turn_cr >= MIN_TURN_CR
+            wins = {}
+            for wmin in windows_min:
+                target = now - wmin * 60
+                # nearest sample at/just before the window start (fallback: oldest)
+                then = None
+                for s in hist:
+                    if s[0] <= target:
+                        then = s
+                    else:
+                        break
+                if then is None:
+                    then = hist[0]
+                _ts, oi_then, vol_then, _p = then
+                oi_pct = ((oi_cur - oi_then) / oi_then * 100.0) if oi_then else 0.0
+                vol_win = max(0.0, vol_cur - vol_then)
+                # rel-vol = actual per-minute PACE vs the stock's normal per-minute
+                # pace. Using the ACTUAL elapsed span (not the nominal window) makes
+                # it coverage-independent: a 2x pace reads 2x even with only a few
+                # minutes of buffer, so the list isn't empty early in the session.
+                span_min = max(1.0, (now - _ts) / 60.0)
+                rate_norm = (avgv / 375.0) if avgv else 0.0        # normal vol/min
+                rate_now = vol_win / span_min                      # actual vol/min
+                rel = (rate_now / rate_norm) if rate_norm > 0 else 0.0
+                covered = _clamp(span_min / float(wmin), 0.0, 1.0)
+                wturn_cr = round((vol_win * px) / 1e7, 2) if px else 0.0
+                wins[f"{wmin}m" if wmin < 60 else f"{wmin//60}h"] = {
+                    "oi_pct": round(oi_pct, 2),
+                    "vol": int(vol_win),
+                    "rel": round(rel, 2),
+                    "cov": round(covered, 2),
+                    "wturn_cr": wturn_cr,   # rupee turnover in window (crore)
+                }
+            out[sym] = {"ltp": round(price, 1), "turn_cr": turn_cr, "liq": liq, "windows": wins}
+        return out
 
     # ---- resolve each stock's near-month futures key (once/day, cached) ----
     def _resolve_keys(self):
@@ -227,6 +304,15 @@ class StockFutures:
     def _score(self, sym, price, oi, vol):
         prev = self.prev.get(sym)
         self.prev[sym] = {"price": price, "oi": oi, "vol": vol}
+
+        # buffer a timestamped sample for the live OI+Volume spike windows
+        if oi is not None and vol is not None:
+            now_t = time.time()
+            h = self.history.setdefault(sym, [])
+            h.append((now_t, float(oi), float(vol), float(price or 0)))
+            cutoff = now_t - 3.4 * 3600          # keep ~3.4h (covers the 3h window)
+            if h[0][0] < cutoff:
+                self.history[sym] = [s for s in h if s[0] >= cutoff]
 
         # --- DAY / SESSION futures-OI change (for the row watermark) ---------
         # Lock the first OI reading of the day as the baseline, then every

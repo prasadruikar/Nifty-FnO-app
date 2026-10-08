@@ -67,13 +67,32 @@ OPT_CACHE_SEC = 900         # re-use a stock's option snapshot for 15 min
 # startup AND shown in the UI, so you can VERIFY the new code actually loaded
 # (if the version on screen doesn't match, the .py on disk wasn't replaced -
 # delete __pycache__ and copy the file again).
-SWING_ENGINE_VERSION = "oi-trend-v9  (2026-10-02)"
+SWING_ENGINE_VERSION = "oi-spike3d-v14  (2026-10-07)"
 
 LOOKBACK_DAYS = 60     # calendar days requested (~40 trading sessions) per fetch
 KEEP_DAYS     = 90     # how much daily history we accumulate/retain on disk
 RECENT        = 10     # the window we count the recent buildup story over
 MIN_DAYS      = 12     # need at least this many sessions to judge a setup
 CACHE_FILE    = Path("swing_cache.json")
+
+# EXPIRY ROLLOVER: around monthly expiry the NEAR-MONTH futures contract we track
+# fills up from its thin far-month OI as positions roll in. That shows as ONE day
+# where OI multiplies abnormally (the +1248% / +9474% artifacts). It is NOT fresh
+# directional buildup, so measuring OI change across it is meaningless. A single
+# real buildup day rarely exceeds ~50-80%; a rollover is hundreds to thousands %.
+ROLL_JUMP_PCT = 120.0   # a 1-day OI increase above this % = contract rollover
+
+
+def _roll_idx(ois):
+    """Index of the most recent contract-rollover day in an OI series (the day OI
+    jumped > ROLL_JUMP_PCT), or -1 if none. Callers measure OI change from AFTER
+    this day so the rollover spike never pollutes the number."""
+    r = -1
+    for i in range(1, len(ois)):
+        p = ois[i - 1]
+        if p > 0 and (ois[i] - p) / p * 100.0 > ROLL_JUMP_PCT:
+            r = i
+    return r
 
 
 def _sign(x):
@@ -426,8 +445,12 @@ class SwingEngine:
         nSB = recent_cls.count("SB"); nLU = recent_cls.count("LU")
         nUP = recent_cls.count("UP"); nDN = recent_cls.count("DN")
 
-        # --- OI expansion over the recent window ---
-        oi_then = ois[-rec - 1] if len(ois) > rec else (ois[0] or 0)
+        # --- OI expansion over the recent window (ROLLOVER-AWARE baseline) ---
+        base_idx = (n - rec - 1) if n > rec else 0
+        roll = _roll_idx(ois)
+        if roll > base_idx:                 # a contract rollover sits inside the window
+            base_idx = roll                 # -> measure buildup from AFTER it, not across it
+        oi_then = ois[base_idx] if 0 <= base_idx < n else (ois[0] or 0)
         oi_chg_pct = ((ois[-1] - oi_then) / oi_then * 100.0) if oi_then else 0.0
 
         # --- where price sits in its recent (10-day) range (context only -
@@ -456,11 +479,18 @@ class SwingEngine:
         # Conviction entering (OI climbing) but price still held in a tight range
         # = positions being BUILT before the move. Tighter range + bigger OI
         # build = more loaded. This is the "about to move" setup Prasad wants.
-        if have_oi and oi_chg_pct >= 4.0 and range_pct <= 3.0:
+        #
+        # RANGE GATE: a 3% 10-day range was far too tight - almost no F&O stock
+        # holds that for 10 sessions, so this list was always empty. COIL_RANGE_PCT
+        # defines "coiling": a 10-day high-low range at or under this % of the low.
+        # ~6% is a realistic quiet consolidation; raise it if you want more (looser)
+        # candidates, lower it for only the very tightest coils.
+        COIL_RANGE_PCT = 6.0
+        if have_oi and oi_chg_pct >= 4.0 and range_pct <= COIL_RANGE_PCT:
             stype = "coiled"
             lean = bull_build - bear_build
             direction = "long" if lean > 0 else "short" if lean < 0 else "flat"
-            tight = _clamp((3.0 - range_pct) / 3.0, 0.0, 1.0)      # tighter range = higher
+            tight = _clamp((COIL_RANGE_PCT - range_pct) / COIL_RANGE_PCT, 0.0, 1.0)  # tighter range = higher
             oi_mag = _clamp(oi_chg_pct, 0, 25) / 25
             score = round(_clamp(oi_mag * 55 + tight * 45, 0, 100), 1)
             strength = "Strong" if score >= 70 else "Building" if score >= 57 else "Early"
@@ -549,6 +579,11 @@ class SwingEngine:
                     continue
                 lb = min(lookback, n - 1)
                 w = ois[-lb - 1:]            # lb+1 OI points across the window
+                # ROLLOVER: if a contract rollover sits inside the window, start
+                # from it so the OI jump can't fake a rising trend
+                rr = _roll_idx(w)
+                if rr >= 0:
+                    w = w[rr:]
                 if len(w) < 3 or not w[0]:
                     continue
                 N = len(w)
@@ -615,6 +650,152 @@ class SwingEngine:
             except Exception:
                 continue
         out.sort(key=lambda x: (x["score"], x["oi_chg_pct"]), reverse=True)
+        return out
+
+    # ---------------- BIG SINGLE-DAY OI SPIKE ----------------
+    def oi_spike(self, min_day=35.0, sessions=3):
+        """Stocks where futures OI jumped more than `min_day`% on ANY of the last
+        `sessions` days (default 3) - a sudden aggressive one-day positioning burst.
+        Contract-rollover days (> ROLL_JUMP_PCT) are excluded; those aren't real
+        buildup. Ranked by the size of the biggest qualifying day."""
+        out = []
+        for sym in self.fut_keys:
+            try:
+                daily = self.daily.get(sym)
+                if not daily or len(daily) < MIN_DAYS:
+                    continue
+                d = daily[-30:]; n = len(d)
+                ois = [x["oi"] for x in d]; closes = [x["c"] for x in d]
+                highs = [x["h"] for x in d]; lows = [x["l"] for x in d]
+                if not any(o > 0 for o in ois):
+                    continue
+                lk = min(sessions, n - 1)            # only the LAST `sessions` days
+                best_pct, best_i = 0.0, None
+                for i in range(n - lk, n):
+                    prev = ois[i - 1]
+                    if not prev:
+                        continue
+                    pct = (ois[i] - prev) / prev * 100.0
+                    if pct > ROLL_JUMP_PCT:            # rollover, not real buildup
+                        continue
+                    if pct > best_pct:
+                        best_pct, best_i = pct, i
+                if best_i is None or best_pct < min_day:
+                    continue
+                pu = closes[best_i] > closes[best_i - 1]
+                direction = "long" if pu else "short"
+                have_oi = True
+                # strip + chart (same shape swingCard expects)
+                day_class = []
+                for i in range(1, n):
+                    _pu = closes[i] > closes[i - 1]; _ou = ois[i] > ois[i - 1]
+                    day_class.append("LB" if _pu and _ou else "SC" if _pu else "SB" if _ou else "LU")
+                strip = [{"date": d[i]["date"][5:], "cls": day_class[i - 1],
+                          "chg": round((closes[i] - closes[i - 1]) / closes[i - 1] * 100, 2) if closes[i - 1] else 0,
+                          "d_oi": int(ois[i] - ois[i - 1])}
+                         for i in range(max(1, n - RECENT), n)]
+                hist = [{"d": x["date"][5:], "c": round(x["c"], 1),
+                         "oi": int(x["oi"]), "v": int(x["v"])} for x in d[-(RECENT + 1):]]
+                win = min(RECENT, n); hi = max(highs[-win:]); lo = min(lows[-win:])
+                spike_day = d[best_i]["date"][5:]
+                spike_price_pct = ((closes[best_i] - closes[best_i - 1]) / closes[best_i - 1] * 100.0) \
+                    if closes[best_i - 1] else 0.0
+                score = round(_clamp(best_pct, 35, 120) / 120 * 100, 1)
+                line = (f"Futures OI +{best_pct:.0f}% in ONE day ({spike_day}) · "
+                        f"price {spike_price_pct:+.1f}% that day "
+                        f"({'fresh longs' if direction == 'long' else 'fresh shorts'}) · "
+                        f"sudden aggressive positioning")
+                out.append({
+                    "sym": sym, "dir": direction, "type": "spike",
+                    "strength": "Strong" if best_pct >= 70 else "Building" if best_pct >= 50 else "Early",
+                    "score": score, "line": line, "days": strip, "hist": hist,
+                    "spike_pct": round(best_pct, 1), "spike_day": spike_day,
+                    "oi_chg_pct": round(best_pct, 1), "rec": lk, "pos": "",
+                    "ltp": round(closes[-1], 1), "lo": round(lo, 1), "hi": round(hi, 1),
+                    "have_oi": True,
+                })
+            except Exception:
+                continue
+        out.sort(key=lambda x: x["spike_pct"], reverse=True)
+        return out
+
+    # ---------------- HIGH-PROB ZONES (OI-built price levels) ----------------
+    def highprob_zones(self, min_oi_sum=3.0):
+        """For every stock: the price ZONE where the biggest futures-OI buildup
+        happened in the last ~10 COMPLETED sessions.
+
+        Method (Prasad's design): compute each session's OI change %, then find the
+        3 CONSECUTIVE sessions with the largest SUMMED OI change - the window that
+        captures the heaviest buildup (e.g. OI deltas 2,7.5,20,110,10,11 -> the
+        window 20,110,10 around the 110 spike). The zone = lowest low .. highest
+        high across those 3 sessions. That's where real money accumulated, so it's
+        the level price will react to when it returns.
+
+        Computed from COMPLETED days only (today's forming bar dropped), so the zone
+        is STABLE through the day - 'figure out the zone at day start'. No live price
+        here; the scanner checks the live LTP against these zones each scan.
+        Returns {sym: {lo, hi, mid, oi_sum, days:[{date,oichg} x3]}}."""
+        today = datetime.date.today().isoformat()
+        out = {}
+        for sym in self.fut_keys:
+            try:
+                daily = self.daily.get(sym)
+                if not daily or len(daily) < 5:
+                    continue
+                d = list(daily)
+                if d and d[-1]["date"] == today:   # drop today's forming session -> stable zone
+                    d = d[:-1]
+                if len(d) < 5:
+                    continue
+                d = d[-11:]                        # ~10 sessions (+1 for the first delta)
+                ois = [x["oi"] for x in d]
+                if not any(o > 0 for o in ois):
+                    continue
+                sess = []                          # per-session OI change % + that day's range
+                for i in range(1, len(d)):
+                    prev = ois[i - 1]
+                    raw = ((ois[i] - prev) / prev * 100.0) if prev else 0.0
+                    # ROLLOVER: a contract-rollover day's OI jump isn't real buildup,
+                    # so neutralise it (0%) - stops it from winning the zone selection
+                    pct = 0.0 if raw > ROLL_JUMP_PCT else raw
+                    sess.append({"date": d[i]["date"][5:], "pct": pct,
+                                 "lo": d[i]["l"], "hi": d[i]["h"]})
+                if len(sess) < 3:
+                    continue
+                # 3 consecutive sessions with the max summed OI change
+                best_sum, best_i = None, 0
+                for i in range(len(sess) - 2):
+                    s = sess[i]["pct"] + sess[i + 1]["pct"] + sess[i + 2]["pct"]
+                    if best_sum is None or s > best_sum:
+                        best_sum, best_i = s, i
+                if best_sum is None or best_sum <= min_oi_sum:
+                    continue                       # no real buildup -> not a zone
+                win = sess[best_i:best_i + 3]
+                lo = min(w["lo"] for w in win); hi = max(w["hi"] for w in win)
+                if not lo or hi <= lo:
+                    continue
+                # GENUINE RETEST FILTER: after the zone formed, did price travel at
+                # least AWAY_PCT beyond the zone and then (it'll be checked live) come
+                # back? A round-trip away-and-back is the high-prob setup; price that
+                # never left is just consolidating. We record whether it left and how
+                # far; the scanner then only lists it once the LIVE price is back in.
+                AWAY_PCT = 2.0
+                left = False; left_ex = 0.0; left_dir = ""
+                for w in sess[best_i + 3:]:
+                    up = ((w["hi"] - hi) / hi * 100.0) if hi else 0.0     # went above the zone
+                    dn = ((lo - w["lo"]) / lo * 100.0) if lo else 0.0     # went below the zone
+                    if up >= AWAY_PCT and up > left_ex:
+                        left, left_ex, left_dir = True, up, "up"
+                    if dn >= AWAY_PCT and dn > left_ex:
+                        left, left_ex, left_dir = True, dn, "down"
+                out[sym] = {
+                    "lo": round(lo, 1), "hi": round(hi, 1), "mid": round((lo + hi) / 2, 1),
+                    "oi_sum": round(best_sum, 1),
+                    "left": left, "left_ex": round(left_ex, 1), "left_dir": left_dir,
+                    "days": [{"date": w["date"], "oichg": round(w["pct"], 1)} for w in win],
+                }
+            except Exception:
+                continue
         return out
 
     # ---------------- search: pull up ANY stock on demand ----------------
